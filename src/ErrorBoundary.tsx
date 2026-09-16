@@ -1,4 +1,15 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import i18n from "./i18n";
+
+// The boundary renders when something already broke, so it must not depend on
+// the translations having loaded: each string carries its English as defaultValue.
+const text = (key: string, english: string): string => {
+  try {
+    return i18n.t(key, { defaultValue: english });
+  } catch {
+    return english;
+  }
+};
 
 // React still requires a class component for error boundaries (no hook
 // equivalent in React 19). Catches render-time exceptions in the subtree
@@ -65,11 +76,13 @@ export class ErrorBoundary extends Component<Props, State> {
             color: "#ff8888",
           }}
         >
-          CLI Pulse — render error
+          {text("error_boundary.title", "CLI Pulse — render error")}
         </div>
         <div style={{ marginBottom: "16px" }}>
-          The UI hit an unrecoverable error. Reporting this to the developer
-          (paste the text below into a GitHub issue) will help fix it.
+          {text(
+            "error_boundary.body",
+            "The UI hit an unrecoverable error. Reporting this to the developer (paste the text below into a GitHub issue) will help fix it.",
+          )}
         </div>
         <div
           style={{
@@ -92,7 +105,9 @@ export class ErrorBoundary extends Component<Props, State> {
             marginBottom: "12px",
           }}
         >
-          <div style={{ fontWeight: 600, marginBottom: "6px" }}>Component stack</div>
+          <div style={{ fontWeight: 600, marginBottom: "6px" }}>
+            {text("error_boundary.component_stack", "Component stack")}
+          </div>
           {componentStack}
         </div>
         <button
@@ -107,7 +122,7 @@ export class ErrorBoundary extends Component<Props, State> {
             cursor: "pointer",
           }}
         >
-          Try to recover
+          {text("error_boundary.recover", "Try to recover")}
         </button>
       </div>
     );

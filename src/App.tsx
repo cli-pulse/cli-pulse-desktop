@@ -17,8 +17,6 @@ import { SUPPORTED_LANGS, setLang, type LangCode } from "./i18n";
 import {
   formatBytes,
   formatInt,
-  formatRelativeMinutes,
-  formatRelativeShort,
   formatRelativeShortParts,
   isStaleProviderRow,
   lastNLocalDates,
@@ -2100,6 +2098,7 @@ function SeverityIcon({
   severity: Alert["severity"];
   intent?: "ok";
 }) {
+  const { t } = useTranslation();
   const baseClass = "shrink-0 w-3.5 h-3.5 mt-0.5";
   if (intent === "ok") {
     // Check-circle for "looking good" empty state.
@@ -2113,7 +2112,7 @@ function SeverityIcon({
         strokeLinejoin="round"
         className={`${baseClass} text-emerald-400`}
         role="img"
-        aria-label="all clear"
+        aria-label={t("alerts.severity_aria_all_clear")}
       >
         <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
         <polyline points="22 4 12 14.01 9 11.01" />
@@ -2131,7 +2130,7 @@ function SeverityIcon({
         strokeLinejoin="round"
         className={`${baseClass} text-red-400`}
         role="img"
-        aria-label="critical"
+        aria-label={t("alerts.severity_aria_critical")}
       >
         <polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2" />
         <line x1="12" y1="8" x2="12" y2="12" />
@@ -2150,7 +2149,7 @@ function SeverityIcon({
         strokeLinejoin="round"
         className={`${baseClass} text-amber-400`}
         role="img"
-        aria-label="warning"
+        aria-label={t("alerts.severity_aria_warning")}
       >
         <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
         <line x1="12" y1="9" x2="12" y2="13" />
@@ -2168,7 +2167,7 @@ function SeverityIcon({
       strokeLinejoin="round"
       className={`${baseClass} text-blue-400`}
       role="img"
-      aria-label="info"
+      aria-label={t("alerts.severity_aria_info")}
     >
       <circle cx="12" cy="12" r="10" />
       <line x1="12" y1="16" x2="12" y2="12" />
@@ -2230,7 +2229,7 @@ function CostTrendChart({ scan }: { scan: ScanResult }) {
         viewBox={`0 0 ${chartWidth} ${chartHeight + 40}`}
         className="w-full h-auto"
         role="img"
-        aria-label="7-day cost trend"
+        aria-label={t("overview.cost_trend_aria")}
       >
         {/* Y-axis grid */}
         {[0.25, 0.5, 0.75, 1].map((frac) => (
@@ -2256,9 +2255,11 @@ function CostTrendChart({ scan }: { scan: ScanResult }) {
             <g key={d.key}>
               <title>
                 {d.key}
-                {"\n"}Claude ${d.claudeCost.toFixed(2)} · Codex ${d.codexCost.toFixed(2)}
-                {d.otherCost > 0 ? ` · Other $${d.otherCost.toFixed(2)}` : ""}
-                {"\n"}Total ${d.totalCost.toFixed(2)}
+                {"\n"}
+                {t("overview.cost_tooltip_split", { claude: fmt(d.claudeCost), codex: fmt(d.codexCost) })}
+                {d.otherCost > 0 ? ` · ${t("overview.cost_tooltip_others", { value: fmt(d.otherCost) })}` : ""}
+                {"\n"}
+                {t("overview.cost_tooltip_total", { value: fmt(d.totalCost) })}
               </title>
               {claudeH > 0 && (
                 <rect
@@ -2318,7 +2319,7 @@ function CostTrendChart({ scan }: { scan: ScanResult }) {
       <div className="flex items-center gap-4 mt-2 text-xs text-neutral-500">
         <LegendDot color="#10b981" label="Claude" />
         <LegendDot color="#06b6d4" label="Codex" />
-        <LegendDot color="#a855f7" label="Other" />
+        <LegendDot color="#a855f7" label={t("sessions.timeline_other_lane")} />
         <span className="ml-auto font-mono">{t("overview.max_per_day", { value: fmt(maxCost) })}</span>
       </div>
     </div>
@@ -2549,6 +2550,11 @@ function Providers({
 }) {
   const { t } = useTranslation();
   const fmt = useMoney();
+  // "5 min" in the app's language, for the stale-row tooltip.
+  const relativeAge = (timestamp: string): string => {
+    const parts = formatRelativeShortParts(timestamp);
+    return parts ? t(`time.unit_${parts.unit}`, { count: parts.value }) : timestamp;
+  };
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // v0.13.0 — per-provider 30-day usage history (server read; sign-in
   // required). Fetched once when paired; the chart renders in each provider's
@@ -3039,7 +3045,7 @@ function Providers({
                           <span
                             className="px-1.5 py-0.5 text-xs rounded bg-amber-950/60 border border-amber-800 text-amber-300"
                             title={t("providers.stale_tooltip", {
-                              age: formatRelativeMinutes(srv.updated_at!),
+                              age: relativeAge(srv.updated_at!),
                             })}
                           >
                             {t("providers.stale_badge")}
@@ -4270,7 +4276,7 @@ function IntegrationsSection() {
             <span
               className="cursor-help text-amber-400"
               title={t("settings.integrations.storage_file_tooltip") || ""}
-              aria-label="info"
+              aria-label={t("settings.integrations.storage_file_tooltip") || undefined}
             >
               ⚠
             </span>
@@ -6724,6 +6730,7 @@ type TimelineState =
 
 function ActivityTimelineChart() {
   const { t } = useTranslation();
+  const fmt = useMoney();
   const [state, setState] = useState<TimelineState>({ kind: "loading" });
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
@@ -6982,10 +6989,10 @@ function ActivityTimelineChart() {
                 bar.row.project ?? t("overview.top_projects_unknown");
               const detailParts: string[] = [];
               if (bar.row.estimated_cost != null) {
-                detailParts.push(`cost: $${bar.row.estimated_cost.toFixed(4)}`);
+                detailParts.push(t("sessions.timeline_tooltip_cost", { value: fmt(bar.row.estimated_cost) }));
               }
               if (bar.row.requests != null) {
-                detailParts.push(`${bar.row.requests} req`);
+                detailParts.push(t("sessions.timeline_tooltip_requests", { count: bar.row.requests }));
               }
               const tooltip =
                 detailParts.length > 0
@@ -7308,8 +7315,8 @@ function FleetHealth({ currentDeviceId }: { currentDeviceId: string | null }) {
           const online = (d.status ?? "").toLowerCase() === "online";
           const isSelf = currentDeviceId != null && d.id === currentDeviceId;
           const metrics = [
-            d.cpu_usage != null ? `CPU ${d.cpu_usage}%` : null,
-            d.memory_usage != null ? `MEM ${d.memory_usage}%` : null,
+            d.cpu_usage != null ? t("machine.fleet_cpu", { value: d.cpu_usage }) : null,
+            d.memory_usage != null ? t("machine.fleet_mem", { value: d.memory_usage }) : null,
             d.cpu_temp_c != null ? `${Math.round(d.cpu_temp_c)}°C` : null,
             d.battery_charge_pct != null
               ? `${t("machine.battery")} ${d.battery_charge_pct}%`
@@ -7317,7 +7324,8 @@ function FleetHealth({ currentDeviceId }: { currentDeviceId: string | null }) {
           ]
             .filter(Boolean)
             .join(" · ");
-          const seen = d.last_seen_at ? formatRelativeShort(d.last_seen_at) : null;
+          const seenParts = d.last_seen_at ? formatRelativeShortParts(d.last_seen_at) : null;
+          const seen = seenParts ? t(`time.unit_${seenParts.unit}`, { count: seenParts.value }) : null;
           return (
             <div
               key={d.id}
@@ -8087,7 +8095,7 @@ function ServerAlertCard({
                     }}
                     className={`${actionBtn} border-neutral-700 text-neutral-300 hover:bg-neutral-800`}
                   >
-                    {m}m
+                    {t("time.unit_min", { count: m })}
                   </button>
                 ))}
             </div>
@@ -8182,11 +8190,11 @@ function EntriesTable({ entries }: { entries: DailyEntry[] }) {
       <table className="w-full text-sm">
         <thead className="bg-neutral-900/60 text-left text-xs text-neutral-400">
           <tr>
-            <th className="px-3 py-2">Provider</th>
-            <th className="px-3 py-2">Model</th>
-            <th className="px-3 py-2 text-right">Input</th>
-            <th className="px-3 py-2 text-right">Output</th>
-            <th className="px-3 py-2 text-right">Cost</th>
+            <th className="px-3 py-2">{t("sessions.col_provider")}</th>
+            <th className="px-3 py-2">{t("providers.col_model")}</th>
+            <th className="px-3 py-2 text-right">{t("providers.col_input")}</th>
+            <th className="px-3 py-2 text-right">{t("providers.col_output")}</th>
+            <th className="px-3 py-2 text-right">{t("providers.col_cost")}</th>
           </tr>
         </thead>
         <tbody>

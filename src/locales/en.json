@@ -93,7 +93,11 @@
     "top_projects_title": "Top projects (30 days)",
     "top_projects_unknown": "(no project)",
     "top_projects_empty": "No projects with activity in the last 30 days",
-    "top_projects_failed": "Couldn't load top projects"
+    "top_projects_failed": "Couldn't load top projects",
+    "cost_trend_aria": "7-day cost trend",
+    "cost_tooltip_split": "Claude {{claude}} · Codex {{codex}}",
+    "cost_tooltip_others": "Other {{value}}",
+    "cost_tooltip_total": "Total {{value}}"
   },
   "providers": {
     "claude_label": "Claude",
@@ -169,7 +173,10 @@
     "timeline_last_refresh": "refreshed {{time}}",
     "timeline_other_lane": "Other",
     "timeline_x_now": "now",
-    "timeline_x_now_minus": "−{{hours}}h"
+    "timeline_x_now_minus": "−{{hours}}h",
+    "timeline_tooltip_cost": "Cost {{value}}",
+    "timeline_tooltip_requests_one": "{{count}} request",
+    "timeline_tooltip_requests_other": "{{count}} requests"
   },
   "machine": {
     "title": "Machine health",
@@ -207,7 +214,9 @@
     "fleet_online": "Online",
     "fleet_offline": "Offline",
     "fleet_unnamed": "Unnamed device",
-    "fleet_this": "this device"
+    "fleet_this": "this device",
+    "fleet_cpu": "CPU {{value}}%",
+    "fleet_mem": "MEM {{value}}%"
   },
   "swarm": {
     "title": "Agent swarms",
@@ -246,7 +255,11 @@
     "action_snooze": "Snooze",
     "resolved_label": "Resolved",
     "severity_critical": "{{count}} critical",
-    "severity_warning": "{{count}} warning"
+    "severity_warning": "{{count}} warning",
+    "severity_aria_all_clear": "All clear",
+    "severity_aria_critical": "Critical",
+    "severity_aria_warning": "Warning",
+    "severity_aria_info": "Info"
   },
   "settings": {
     "account_heading": "Account",
@@ -583,5 +596,11 @@
     "exited_unknown": "[process exited]",
     "launched_count": "Launched {{n}} this session",
     "provider_missing": "{{provider}} CLI not found — install it to use this terminal."
+  },
+  "error_boundary": {
+    "title": "CLI Pulse — render error",
+    "body": "The UI hit an unrecoverable error. Reporting this to the developer (paste the text below into a GitHub issue) will help fix it.",
+    "component_stack": "Component stack",
+    "recover": "Try to recover"
   }
 }

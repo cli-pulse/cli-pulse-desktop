@@ -1,0 +1,35 @@
+{
+  "_about": "English the hardcoded-UI test allows, each with why. Shrink this file; never grow it without a reason.",
+  "entries": [
+    {
+      "file": "src/App.tsx",
+      "text": "CLI Pulse",
+      "count": 1,
+      "reason": "Brand name, used as the logo image's alt text."
+    },
+    {
+      "file": "src/App.tsx",
+      "text": "Claude",
+      "count": 1,
+      "reason": "Provider brand name in the cost-trend legend."
+    },
+    {
+      "file": "src/App.tsx",
+      "text": "Codex",
+      "count": 1,
+      "reason": "Provider brand name in the cost-trend legend."
+    },
+    {
+      "file": "src/App.tsx",
+      "text": "you@example.com",
+      "count": 1,
+      "reason": "Example address in the sign-in email field's placeholder; the reserved example.com domain reads the same in every language."
+    },
+    {
+      "file": "src/App.tsx",
+      "text": "MB",
+      "count": 1,
+      "reason": "Unit symbol after a process's memory; en, zh-CN and ja all write MB."
+    }
+  ]
+}
