@@ -13,7 +13,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { check as checkUpdate } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { useTranslation } from "react-i18next";
-import { SUPPORTED_LANGS, setLang, type LangCode } from "./i18n";
+import { SUPPORTED_LANGS, setLang, uiLocale, type LangCode } from "./i18n";
 import {
   formatBytes,
   formatInt,
@@ -21,6 +21,7 @@ import {
   isStaleProviderRow,
   lastNLocalDates,
   secondsToShortParts,
+  shortWeekday,
 } from "./lib/format";
 import {
   loadHiddenProviders,
@@ -2197,7 +2198,7 @@ function CostTrendChart({ scan }: { scan: ScanResult }) {
       const label =
         i === 0
           ? t("overview.label_today")
-          : d.toLocaleDateString(undefined, { weekday: "short" });
+          : shortWeekday(key, uiLocale());
       const entries = scan.entries.filter(
         (e) => e.date === key && e.model !== CLAUDE_MSG_BUCKET
       );
@@ -2214,7 +2215,7 @@ function CostTrendChart({ scan }: { scan: ScanResult }) {
       out.push({ key, label, claudeCost, codexCost, otherCost, totalCost });
     }
     return out;
-  }, [scan]);
+  }, [scan, t]);
 
   const maxCost = Math.max(...days.map((d) => d.totalCost), 1);
   const chartWidth = 720;
@@ -3726,7 +3727,7 @@ function Settings({
           {lastSync && (
             <div className="text-xs text-neutral-500">
               {t("settings.last_sync", {
-                time: lastSync.at.toLocaleTimeString(),
+                time: lastSync.at.toLocaleTimeString(uiLocale()),
                 sessions: lastSync.report.live_sessions_sent,
                 cost: fmt(lastSync.report.total_cost_usd),
                 files: lastSync.report.files_scanned,
@@ -6874,7 +6875,7 @@ function ActivityTimelineChart() {
         {(state.kind === "loaded" || state.kind === "stale") && (
           <span className="text-xs text-neutral-500">
             {t("sessions.timeline_last_refresh", {
-              time: state.fetchedAt.toLocaleTimeString(),
+              time: state.fetchedAt.toLocaleTimeString(uiLocale()),
             })}
           </span>
         )}
@@ -7073,7 +7074,7 @@ function Sessions({
           {t("sessions.header", {
             active: sessions.length,
             total: snapshot.total_processes_seen,
-            time: new Date(snapshot.collected_at).toLocaleTimeString(),
+            time: new Date(snapshot.collected_at).toLocaleTimeString(uiLocale()),
           })}
         </div>
         <button
@@ -8046,7 +8047,7 @@ function ServerAlertCard({
               </span>
             )}
             <span className="text-neutral-500">
-              {new Date(alert.created_at).toLocaleString()}
+              {new Date(alert.created_at).toLocaleString(uiLocale())}
             </span>
           </div>
 
@@ -8159,7 +8160,7 @@ function AlertCard({ alert }: { alert: Alert }) {
               </span>
             )}
             <span className="text-neutral-500">
-              {new Date(alert.created_at).toLocaleString()}
+              {new Date(alert.created_at).toLocaleString(uiLocale())}
             </span>
           </div>
         </div>

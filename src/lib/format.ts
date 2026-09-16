@@ -218,3 +218,14 @@ export function secondsToShortParts(seconds: number): {
   if (hours < 24) return { value: hours, unit: "hr" };
   return { value: Math.floor(hours / 24), unit: "d" };
 }
+
+/**
+ * Short weekday name for an ISO calendar date ("2026-09-17" -> "Thu" in en).
+ *
+ * The date is read as UTC midnight and formatted in UTC. Formatting it in the local
+ * zone, as the cost chart used to, names the previous day everywhere west of UTC:
+ * Thursday rendered as "mié" in Mexico City and "Wed" in New York.
+ */
+export function shortWeekday(isoDate: string, locale: string): string {
+  return new Date(`${isoDate}T00:00:00Z`).toLocaleDateString(locale, { weekday: "short", timeZone: "UTC" });
+}

@@ -55,6 +55,44 @@ describe("i18n bootstrap", () => {
   });
 });
 
+describe("language detection", () => {
+  // The old detection matched case-sensitively and then took the FIRST supported
+  // code sharing the language subtag, which only worked while zh-CN was the one
+  // Chinese. Pinned here so adding zh-TW cannot quietly route Taiwan to Simplified.
+  it("matches case- and separator-insensitively", async () => {
+    const { resolveLanguage } = await freshI18n();
+    expect(resolveLanguage("ZH-cn")).toBe("zh-CN");
+    expect(resolveLanguage("zh_CN")).toBe("zh-CN");
+    expect(resolveLanguage("JA")).toBe("ja");
+    expect(resolveLanguage("en-GB")).toBe("en");
+  });
+
+  it("routes Chinese by script and region", async () => {
+    const { resolveLanguage, SUPPORTED_LANGS } = await freshI18n();
+    const traditional = SUPPORTED_LANGS.some((l) => l.code === ("zh-TW" as string)) ? "zh-TW" : "zh-CN";
+    for (const tag of ["zh-TW", "zh-HK", "zh-MO", "zh-Hant", "zh-Hant-TW"]) {
+      expect(resolveLanguage(tag), tag).toBe(traditional);
+    }
+    for (const tag of ["zh", "zh-CN", "zh-SG", "zh-Hans", "zh-Hans-CN"]) {
+      expect(resolveLanguage(tag), tag).toBe("zh-CN");
+    }
+  });
+
+  it("returns null for a language the app does not ship", async () => {
+    const { resolveLanguage } = await freshI18n();
+    expect(resolveLanguage("fr-FR")).toBeNull();
+    expect(resolveLanguage("")).toBeNull();
+    expect(resolveLanguage(undefined)).toBeNull();
+  });
+
+  it("keeps <html lang> in step with the UI language", async () => {
+    const mod = await freshI18n();
+    await mod.setLang("ja");
+    if (typeof document !== "undefined") expect(document.documentElement.lang).toBe("ja");
+    await mod.setLang("en");
+  });
+});
+
 describe("i18n covers all critical labels in every supported language", () => {
   // Every required key must resolve to a non-empty string in every
   // supported language. Catches accidentally-deleted keys before they
