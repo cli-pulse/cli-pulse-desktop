@@ -43,6 +43,21 @@ export function saveCurrency(code: string): void {
 }
 
 /**
+ * What the Rust tray needs to show amounts the way `formatMoney` does: the symbol,
+ * the rate from USD and the decimals. Null means "US dollars", under exactly the
+ * conditions formatMoney falls back to them.
+ */
+export function moneyDisplayMeta(
+  currency: string,
+  rates: Record<string, number> | null | undefined,
+): { symbol: string; rate: number; decimals: number } | null {
+  const meta = META.get(currency);
+  const rate = rates?.[currency];
+  if (!meta || currency === "USD" || rate == null || !Number.isFinite(rate)) return null;
+  return { symbol: meta.symbol, rate, decimals: meta.decimals };
+}
+
+/**
  * Format a USD amount in `currency`. Falls back to the exact USD formatter
  * (which keeps sub-cent precision) for USD, an unknown currency, or a missing/
  * non-finite rate — so a slow/failed FX fetch never blanks a cost.

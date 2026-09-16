@@ -568,7 +568,11 @@
     "not_paired": "未サインイン",
     "no_data": "—",
     "open_label": "CLI Pulse を開く",
-    "quit_label": "終了"
+    "quit_label": "終了",
+    "age_seconds_template": "{n} 秒",
+    "age_minutes_template": "{n} 分",
+    "age_hours_template": "{n} 時間",
+    "age_days_template": "{n} 日"
   },
   "terminal": {
     "section_title": "ローカルターミナル (ベータ)",
@@ -590,5 +594,19 @@
     "body": "UI で回復できないエラーが発生しました。下のテキストを GitHub の Issue に貼り付けて開発者に報告していただくと、修正に役立ちます。",
     "component_stack": "コンポーネントスタック",
     "recover": "復旧を試す"
+  },
+  "notify": {
+    "pair_title": "CLI Pulse — ペアリング完了",
+    "pair_body": "デバイス「{device}」がスマートフォンとの同期を開始しました。",
+    "sync_paused_title": "CLI Pulse — 同期を一時停止",
+    "sync_paused_lead": "同期に {count} 回連続で失敗しました。",
+    "signed_out_title": "CLI Pulse — 再度サインインしてください",
+    "signed_out_device_missing": "このデバイスはアカウントから削除されました。再度サインインしてペアリングし直してください。",
+    "signed_out_account_missing": "CLI Pulse アカウントにアクセスできなくなりました。続けるには再度サインインしてください。",
+    "signed_out_expired": "サインインの有効期限が切れました。同期を続けるには再度サインインしてください。",
+    "budget_daily_title": "日次予算を超過 — {amount}",
+    "budget_daily_body": "本日の支出 {spend} が日次予算 {limit} を超えています。",
+    "budget_weekly_title": "週次予算を超過 — {amount}",
+    "budget_weekly_body": "過去 7 日間の支出合計 {spend} が週次予算 {limit} を超えています。"
   }
 }

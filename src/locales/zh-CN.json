@@ -568,7 +568,11 @@
     "not_paired": "未登录",
     "no_data": "—",
     "open_label": "打开 CLI Pulse",
-    "quit_label": "退出"
+    "quit_label": "退出",
+    "age_seconds_template": "{n} 秒",
+    "age_minutes_template": "{n} 分钟",
+    "age_hours_template": "{n} 小时",
+    "age_days_template": "{n} 天"
   },
   "terminal": {
     "section_title": "本地终端 (测试版)",
@@ -590,5 +594,19 @@
     "body": "界面遇到了无法恢复的错误。把下方文字粘贴到 GitHub issue 中反馈给开发者，有助于修复问题。",
     "component_stack": "组件堆栈",
     "recover": "尝试恢复"
+  },
+  "notify": {
+    "pair_title": "CLI Pulse — 已配对",
+    "pair_body": "设备“{device}”已开始与你的手机同步。",
+    "sync_paused_title": "CLI Pulse — 同步已暂停",
+    "sync_paused_lead": "连续 {count} 次同步失败。",
+    "signed_out_title": "CLI Pulse — 请重新登录",
+    "signed_out_device_missing": "此设备已从你的账户中移除。请重新登录以再次配对。",
+    "signed_out_account_missing": "你的 CLI Pulse 账户已无法访问。请重新登录以继续。",
+    "signed_out_expired": "登录已过期。请重新登录以继续同步。",
+    "budget_daily_title": "每日预算已超出 — {amount}",
+    "budget_daily_body": "今日支出 {spend} 已超过每日预算 {limit}。",
+    "budget_weekly_title": "每周预算已超出 — {amount}",
+    "budget_weekly_body": "最近 7 天支出共计 {spend}，已超过每周预算 {limit}。"
   }
 }

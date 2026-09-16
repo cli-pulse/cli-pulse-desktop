@@ -335,6 +335,43 @@ mod tests {
         );
     }
 
+    /// The budget notification is rebuilt, in the UI language, from the amounts in
+    /// the alert this module writes (notify::budget_text). If these templates change so
+    /// the amounts no longer parse, the notification silently falls back to English;
+    /// this pins the two together.
+    #[test]
+    fn budget_alerts_render_localized_notifications() {
+        let copy = crate::notify::NotificationCopy {
+            budget_daily_title: "D {amount}".into(),
+            budget_daily_body: "D {spend} / {limit}".into(),
+            budget_weekly_title: "W {amount}".into(),
+            budget_weekly_body: "W {spend} / {limit}".into(),
+            ..crate::notify::NotificationCopy::default()
+        };
+        let scan = dummy_scan(&Utc::now().format("%Y-%m-%d").to_string(), 75.0, 10.0);
+        let th = AlertThresholds {
+            daily_budget_usd: Some(50.0),
+            weekly_budget_usd: Some(20.0),
+            ..AlertThresholds::default()
+        };
+        let alerts = compute(&scan, &dummy_sessions(0, 0.0), &th, None);
+        let daily = alerts
+            .iter()
+            .find(|a| a.id.starts_with("budget-daily-"))
+            .expect("daily alert");
+        assert_eq!(
+            crate::notify::budget_text(&copy, daily),
+            ("D $75.00".into(), "D $75.00 / $50.00".into())
+        );
+        let weekly = alerts
+            .iter()
+            .find(|a| a.id.starts_with("budget-weekly-"))
+            .expect("weekly alert");
+        let (title, body) = crate::notify::budget_text(&copy, weekly);
+        assert!(title.starts_with("W $"), "{title}");
+        assert!(body.ends_with(" / $20.00"), "{body}");
+    }
+
     #[test]
     fn daily_budget_under_limit_no_alert() {
         let scan = dummy_scan("2026-04-24", 10.0, 5.0);

@@ -35,7 +35,14 @@ import {
   cacheHitRateOf,
   computeStreaks,
 } from "./lib/activity";
-import { CURRENCIES, formatMoney, loadCurrency, saveCurrency, type FxRates } from "./lib/money";
+import {
+  CURRENCIES,
+  formatMoney,
+  loadCurrency,
+  saveCurrency,
+  type FxRates,
+  moneyDisplayMeta,
+} from "./lib/money";
 import {
   RANGE_PRESETS,
   MIN_DAYS,
@@ -743,8 +750,8 @@ export default function App() {
   // language at call time, regardless of which render owns the
   // useEffect.
   useEffect(() => {
-    pushTrayCopyFromI18n((key) => i18n.t(key));
-  }, [i18n.language, i18n]);
+    pushTrayCopyFromI18n((key) => i18n.t(key), moneyDisplayMeta(currency, fxRates?.rates ?? null));
+  }, [i18n.language, i18n, currency, fxRates]);
 
   // v0.10.0 — global keyboard shortcuts. Power users have asked for
   // this; the v0.6.1 Esc-modal fix already showed the foundation
@@ -6331,7 +6338,10 @@ function AboutSection({ paired }: { paired: boolean }) {
 // in which case force_tray_menu_refresh is a no-op on the backend
 // side. Any other error gets swallowed via .catch — a tray
 // out-of-sync isn't worth crashing the UI flow.
-function pushTrayCopyFromI18n(t: (key: string) => string): Promise<void> {
+function pushTrayCopyFromI18n(
+  t: (key: string) => string,
+  money: ReturnType<typeof moneyDisplayMeta>,
+): Promise<void> {
   return invoke<void>("force_tray_menu_refresh", {
     copy: {
       headerLabel: t("tray.header_label"),
@@ -6343,6 +6353,26 @@ function pushTrayCopyFromI18n(t: (key: string) => string): Promise<void> {
       noData: t("tray.no_data"),
       openLabel: t("tray.open_label"),
       quitLabel: t("tray.quit_label"),
+      ageSecondsTemplate: t("tray.age_seconds_template"),
+      ageMinutesTemplate: t("tray.age_minutes_template"),
+      ageHoursTemplate: t("tray.age_hours_template"),
+      ageDaysTemplate: t("tray.age_days_template"),
+      money,
+    },
+    // Native notifications are raised by Rust; their text follows the UI language too.
+    notification: {
+      pairTitle: t("notify.pair_title"),
+      pairBody: t("notify.pair_body"),
+      syncPausedTitle: t("notify.sync_paused_title"),
+      syncPausedLead: t("notify.sync_paused_lead"),
+      signedOutTitle: t("notify.signed_out_title"),
+      signedOutDeviceMissing: t("notify.signed_out_device_missing"),
+      signedOutAccountMissing: t("notify.signed_out_account_missing"),
+      signedOutExpired: t("notify.signed_out_expired"),
+      budgetDailyTitle: t("notify.budget_daily_title"),
+      budgetDailyBody: t("notify.budget_daily_body"),
+      budgetWeeklyTitle: t("notify.budget_weekly_title"),
+      budgetWeeklyBody: t("notify.budget_weekly_body"),
     },
   }).catch((e: any) => {
     // Tray install may have failed on this platform; not fatal.
