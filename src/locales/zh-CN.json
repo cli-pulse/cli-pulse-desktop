@@ -222,7 +222,6 @@
   "alerts": {
     "nothing": "没什么紧急的 —— 无活跃通知。",
     "active": "{{count}} 条活跃通知",
-    "active_plural": "{{count}} 条活跃通知",
     "empty_title": "一片安静 🌙",
     "empty_body": "当每日/每周预算被突破,或某个 AI CLI 进程 CPU 飙升时会触发通知。请在<strong>设置 → 预算</strong>中设定阈值。",
     "filter_open": "未解决",
@@ -247,7 +246,6 @@
     "device_id": "设备 ID",
     "user_id": "用户 ID",
     "helper_version": "Helper 版本",
-    "pair_heading": "配对此设备",
     "pair_hint": "macOS 用户:打开 CLI Pulse 菜单栏应用 → 设置 → 连接 → 「设置 Sync」,然后将显示的 6 位配对码输入到下方。也可以在本节顶部直接用邮箱登录。",
     "pairing_code": "配对码",
     "device_name_optional": "设备名称(可选)",
@@ -297,8 +295,6 @@
     "about_platform": "平台",
     "about_paired_for": "已配对",
     "about_not_paired": "未配对",
-    "about_last_scan": "上次扫描",
-    "about_cached_files": "缓存文件",
     "about_diagnostics_hint": "提交问题时把这块信息复制进去。",
     "about_copy_diagnostics": "复制诊断信息",
     "about_copied": "已复制!",
@@ -441,7 +437,6 @@
     "available": "发现 {{version}},正在下载…",
     "downloading": "下载 {{pct}}%",
     "ready": "更新已安装,重启后生效。",
-    "error": "更新失败:{{error}}",
     "error_network": "更新时网络错误,请检查连接后重试。({{error}})",
     "error_permissions": "更新需要更高权限来写入新文件,请尝试以管理员身份运行。({{error}})",
     "error_disk_full": "磁盘空间不足,无法安装更新。请清理后重试。({{error}})",
@@ -463,8 +458,7 @@
     "budget_saved": "预算已保存。",
     "err_budget_nonneg": "每日预算必须是非负数。",
     "err_weekly_nonneg": "每周预算必须是非负数。",
-    "err_cpu_range": "CPU 阈值必须在 0–100 之间。",
-    "err_code_empty": "配对码为空"
+    "err_cpu_range": "CPU 阈值必须在 0–100 之间。"
   },
   "auth": {
     "signin": {
@@ -488,7 +482,6 @@
     }
   },
   "misc": {
-    "provider_label": "服务商:{{name}}",
     "project_label": "项目:{{name}}",
     "session_label": "会话:{{name}}",
     "device_label": "设备:{{name}}",
@@ -504,7 +497,6 @@
   },
   "remote": {
     "title": "远程审批",
-    "heading_pending": "待审批请求",
     "empty_pending": "暂无待审批请求。",
     "disabled_hint": "远程控制已关闭。请在「设置 → 隐私」中启用。",
     "row_unknown_device": "未知设备",
@@ -519,11 +511,9 @@
     "action_failed": "操作失败:{{err}}",
     "error_already_decided": "另一台设备已处理 — 列表刷新中。",
     "age_ago": "{{age}}前",
-    "badge_pending_count_one": "{{count, number}} 个待审批",
     "badge_pending_count_other": "{{count, number}} 个待审批",
     "badge_tooltip": "打开远程审批",
     "sessions_heading": "活跃的远程会话",
-    "sessions_readonly_badge": "只读预览",
     "sessions_empty": "当前无远程会话运行。",
     "session_status_pending": "等待中",
     "session_status_running": "运行中",
@@ -551,7 +541,6 @@
     "session_start_processing": "启动中…",
     "session_start_failed": "无法启动会话:{{err}}",
     "agent_status_heading": "代理诊断",
-    "agent_status_running_one": "{{count}} 个会话运行中",
     "agent_status_running_other": "{{count}} 个会话运行中",
     "agent_status_lifetime": "累计承载 {{count}} 个",
     "agent_status_last_tick": "{{age}}前最后一次轮询",
