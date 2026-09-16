@@ -3,7 +3,10 @@ import { initReactI18next } from "react-i18next";
 
 import en from "./locales/en.json";
 import zhCN from "./locales/zh-CN.json";
+import zhTW from "./locales/zh-TW.json";
 import ja from "./locales/ja.json";
+import ko from "./locales/ko.json";
+import es from "./locales/es.json";
 
 /**
  * Supported UI languages. Keep in sync with the `locales/` directory
@@ -12,7 +15,10 @@ import ja from "./locales/ja.json";
 export const SUPPORTED_LANGS = [
   { code: "en", label: "English" },
   { code: "zh-CN", label: "简体中文" },
+  { code: "zh-TW", label: "繁體中文" },
   { code: "ja", label: "日本語" },
+  { code: "ko", label: "한국어" },
+  { code: "es", label: "Español" },
 ] as const;
 
 export type LangCode = (typeof SUPPORTED_LANGS)[number]["code"];
@@ -24,8 +30,7 @@ const STORAGE_KEY = "cli-pulse.lang";
  *
  * Case- and separator-insensitive (`zh_cn`, `ZH-CN`, `zh-Hans-CN`). Chinese goes by
  * script or region, not by the first entry that happens to share the `zh` subtag:
- * Traditional tags (Hant, TW, HK, MO) get zh-TW once it ships and zh-CN until then;
- * every other Chinese tag gets zh-CN. Other languages match on the language subtag,
+ * Traditional tags (Hant, TW, HK, MO) get zh-TW; every other Chinese tag gets zh-CN. Other languages match on the language subtag,
  * so en-GB is en and ja-JP is ja.
  */
 export function resolveLanguage(tag: string | null | undefined): LangCode | null {
@@ -70,7 +75,10 @@ i18n.use(initReactI18next).init({
   resources: {
     en: { translation: en },
     "zh-CN": { translation: zhCN },
+    "zh-TW": { translation: zhTW },
     ja: { translation: ja },
+    ko: { translation: ko },
+    es: { translation: es },
   },
   lng: detectInitialLang(),
   supportedLngs: SUPPORTED_LANGS.map((l) => l.code),
@@ -78,8 +86,9 @@ i18n.use(initReactI18next).init({
   interpolation: {
     escapeValue: false,
     // v0.4.6 — `{{n, number}}` formatter routes through Intl.NumberFormat
-    // with the active language so 2782 renders as "2,782" in en/zh-CN/ja
-    // (all three use the comma per CLDR). VM 2026-05-04 flagged that
+    // with the active language so 2782 renders as "2,782" in en/zh-CN/zh-TW/ja/ko
+    // (all use the comma per CLDR; es groups with a period, and only from five
+    // digits: 2782, 12.345). VM 2026-05-04 flagged that
     // numbers were being interpolated as raw `String(n)` ("2782") under
     // v0.4.5's plural-aware {{count}} interpolation, since by default
     // i18next doesn't run numbers through toLocaleString.
@@ -107,7 +116,7 @@ i18n.on("languageChanged", syncDocumentLang);
 /**
  * Switch the active UI language. `i18next.changeLanguage` returns a
  * Promise that resolves once resources for `code` are loaded, but
- * because all three locales are bundled at build time (statically
+ * because every locale is bundled at build time (statically
  * imported above), resolution is effectively synchronous in practice.
  * We still track the Promise so any future resource-loading error
  * surfaces as a console warning instead of an unhandled rejection.

@@ -269,7 +269,7 @@
     "device_id": "Device ID",
     "user_id": "User ID",
     "helper_version": "Helper version",
-    "pair_hint": "On macOS: open the CLI Pulse menu bar app → Settings → Connection → Set Up Sync, then type the 6-digit code shown there into the field below. Or sign in with email at the top of this section instead.",
+    "pair_hint": "On macOS: open the CLI Pulse menu bar app → Settings → Sync Status → Set Up Cloud Sync, then type the 6-digit code shown there into the field below. Or sign in with email at the top of this section instead.",
     "pairing_code": "Pairing code",
     "device_name_optional": "Device name (optional)",
     "device_name_placeholder": "e.g. Jason's Surface",

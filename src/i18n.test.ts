@@ -78,6 +78,13 @@ describe("language detection", () => {
     }
   });
 
+  it("routes Korean and Spanish by language subtag, whatever the region", async () => {
+    const { resolveLanguage } = await freshI18n();
+    for (const tag of ["ko", "ko-KR", "ko_kr"]) expect(resolveLanguage(tag), tag).toBe("ko");
+    for (const tag of ["es", "es-ES", "es-MX", "es-419"]) expect(resolveLanguage(tag), tag).toBe("es");
+    expect(resolveLanguage("zh-Hant-HK")).toBe("zh-TW");
+  });
+
   it("returns null for a language the app does not ship", async () => {
     const { resolveLanguage } = await freshI18n();
     expect(resolveLanguage("fr-FR")).toBeNull();
@@ -633,6 +640,16 @@ describe("i18n delete-phrase per-language (v0.5.4)", () => {
     mod.setLang("ja");
     expect(mod.default.t("settings.danger.delete_phrase")).toBe("削除");
   });
+
+  it.each([
+    ["zh-TW", "刪除"],
+    ["ko", "삭제"],
+    ["es", "ELIMINAR"],
+  ] as const)("%s delete phrase resolves to %s", async (code, phrase) => {
+    const mod = await freshI18n();
+    mod.setLang(code);
+    expect(mod.default.t("settings.danger.delete_phrase")).toBe(phrase);
+  });
 });
 
 describe("i18n number formatter (v0.4.6)", () => {
@@ -659,5 +676,17 @@ describe("i18n number formatter (v0.4.6)", () => {
     const mod = await freshI18n();
     mod.setLang("ja");
     expect(mod.default.t("providers.messages", { count: 2782 })).toBe("2,782 メッセージ");
+  });
+
+  // es is the first shipped language with a `many` category (1000000, 1.5e6) and
+  // the first that does not group four-digit numbers.
+  it("es messages key picks `many` for a million and groups per CLDR", async () => {
+    const mod = await freshI18n();
+    mod.setLang("es");
+    expect(mod.default.services.pluralResolver.getSuffix("es", 1000000)).toBe("_many");
+    expect(mod.default.t("providers.messages", { count: 1 })).toBe("1 mensaje");
+    expect(mod.default.t("providers.messages", { count: 2782 })).toBe("2782 mensajes");
+    expect(mod.default.t("providers.messages", { count: 1000000 })).toBe("1.000.000 mensajes");
+    expect(mod.default.t("alerts.active", { count: 1000000 })).toBe("1000000 alertas activas");
   });
 });
