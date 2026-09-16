@@ -19,22 +19,51 @@ export type LangCode = (typeof SUPPORTED_LANGS)[number]["code"];
 
 const STORAGE_KEY = "cli-pulse.lang";
 
+/**
+ * An OS or browser language tag -> the UI language to show, or null.
+ *
+ * Case- and separator-insensitive (`zh_cn`, `ZH-CN`, `zh-Hans-CN`). Chinese goes by
+ * script or region, not by the first entry that happens to share the `zh` subtag:
+ * Traditional tags (Hant, TW, HK, MO) get zh-TW once it ships and zh-CN until then;
+ * every other Chinese tag gets zh-CN. Other languages match on the language subtag,
+ * so en-GB is en and ja-JP is ja.
+ */
+export function resolveLanguage(tag: string | null | undefined): LangCode | null {
+  if (!tag) return null;
+  const parts = tag.replace(/_/g, "-").toLowerCase().split("-").filter(Boolean);
+  if (parts.length === 0) return null;
+  const codes: string[] = SUPPORTED_LANGS.map((l) => l.code);
+  const exact = codes.find((c) => c.toLowerCase() === parts.join("-"));
+  if (exact) return exact as LangCode;
+  const [language, ...rest] = parts;
+  if (language === "zh") {
+    const traditional = rest.includes("hant") || rest.some((p) => p === "tw" || p === "hk" || p === "mo");
+    const target = traditional && codes.includes("zh-TW") ? "zh-TW" : "zh-CN";
+    return codes.includes(target) ? (target as LangCode) : null;
+  }
+  const byLanguage = codes.find((c) => c.toLowerCase() === language);
+  return (byLanguage as LangCode | undefined) ?? null;
+}
+
 function detectInitialLang(): LangCode {
   // 1. User choice stashed in localStorage (set via Settings)
   const stored = (globalThis as any).localStorage?.getItem(STORAGE_KEY);
   if (stored && SUPPORTED_LANGS.some((l) => l.code === stored)) {
     return stored as LangCode;
   }
-  // 2. Browser/OS language — exact match first, then prefix
-  const nav = (globalThis as any).navigator?.language as string | undefined;
-  if (nav) {
-    const exact = SUPPORTED_LANGS.find((l) => l.code === nav);
-    if (exact) return exact.code;
-    const prefix = nav.split("-")[0];
-    const pre = SUPPORTED_LANGS.find((l) => l.code.split("-")[0] === prefix);
-    if (pre) return pre.code;
+  // 2. The OS/browser preference list, in order, then the single preferred tag.
+  const nav = (globalThis as any).navigator;
+  const preferred: string[] = [...(nav?.languages ?? []), nav?.language].filter(Boolean);
+  for (const tag of preferred) {
+    const lang = resolveLanguage(tag);
+    if (lang) return lang;
   }
   return "en";
+}
+
+/** The active UI language, for date and number formatting that should follow it. */
+export function uiLocale(): string {
+  return i18n.language || "en";
 }
 
 i18n.use(initReactI18next).init({
@@ -44,6 +73,7 @@ i18n.use(initReactI18next).init({
     ja: { translation: ja },
   },
   lng: detectInitialLang(),
+  supportedLngs: SUPPORTED_LANGS.map((l) => l.code),
   fallbackLng: "en",
   interpolation: {
     escapeValue: false,
@@ -62,6 +92,17 @@ i18n.use(initReactI18next).init({
   },
   returnNull: false,
 });
+
+// <html lang> decides which CJK glyphs the WebView falls back to (Han
+// unification: the same code point is drawn differently for zh-CN, zh-TW and ja)
+// and how screen readers pronounce the page. index.html ships "en"; keep it true.
+function syncDocumentLang(lng: string): void {
+  if (typeof document !== "undefined" && document.documentElement) {
+    document.documentElement.lang = lng;
+  }
+}
+syncDocumentLang(i18n.language);
+i18n.on("languageChanged", syncDocumentLang);
 
 /**
  * Switch the active UI language. `i18next.changeLanguage` returns a
