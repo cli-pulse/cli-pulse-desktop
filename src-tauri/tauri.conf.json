@@ -27,6 +27,12 @@
     "active": true,
     "createUpdaterArtifacts": true,
     "targets": ["nsis", "deb", "rpm", "appimage"],
+    "windows": {
+      "nsis": {
+        "languages": ["English", "SimpChinese", "TradChinese", "Japanese", "Korean", "Spanish"],
+        "displayLanguageSelector": false
+      }
+    },
     "category": "DeveloperTool",
     "shortDescription": "Track AI CLI usage and cost",
     "longDescription": "CLI Pulse tracks usage, tokens, and cost for AI command-line tools like Claude Code, Codex, Gemini CLI, Cursor, Kimi, GLM and more — all from a native desktop app.",
