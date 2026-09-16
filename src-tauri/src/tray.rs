@@ -76,6 +76,25 @@ pub struct TrayCopy {
     pub no_data: String,
     pub open_label: String,
     pub quit_label: String,
+    /// Age units for `{age}`, each containing a literal "{n}". Pushed from the
+    /// locale files like the templates above; before, the units were English inside
+    /// a translated sentence ("2 min前同步").
+    pub age_seconds_template: String,
+    pub age_minutes_template: String,
+    pub age_hours_template: String,
+    pub age_days_template: String,
+    /// The display currency chosen in Settings. None = US dollars, as stored.
+    pub money: Option<MoneyFormat>,
+}
+
+/// How to show a US-dollar amount in the user's display currency. Mirrors the
+/// frontend's `formatMoney`: symbol prefix, fixed decimals, comma grouping.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MoneyFormat {
+    pub symbol: String,
+    /// Units of the display currency per 1 USD.
+    pub rate: f64,
+    pub decimals: usize,
 }
 
 impl Default for TrayCopy {
@@ -94,6 +113,11 @@ impl Default for TrayCopy {
             no_data: "—".to_string(),
             open_label: "Open CLI Pulse".to_string(),
             quit_label: "Quit".to_string(),
+            age_seconds_template: "{n} s".to_string(),
+            age_minutes_template: "{n} min".to_string(),
+            age_hours_template: "{n} hr".to_string(),
+            age_days_template: "{n} d".to_string(),
+            money: None,
         }
     }
 }
@@ -285,6 +309,42 @@ fn format_usd(value: f64) -> String {
     format!("${value:.2}")
 }
 
+/// Comma-grouped fixed-point number: 1234.5 with 2 decimals -> "1,234.50".
+fn group_thousands(value: f64, decimals: usize) -> String {
+    let fixed = format!("{:.*}", decimals, value.abs());
+    let (int_part, frac_part) = match fixed.split_once('.') {
+        Some((i, f)) => (i.to_string(), Some(f.to_string())),
+        None => (fixed.clone(), None),
+    };
+    let mut grouped = String::new();
+    for (i, ch) in int_part.chars().enumerate() {
+        if i > 0 && (int_part.len() - i) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(ch);
+    }
+    let sign = if value < 0.0 && fixed.chars().any(|c| c.is_ascii_digit() && c != '0') {
+        "-"
+    } else {
+        ""
+    };
+    match frac_part {
+        Some(f) => format!("{sign}{grouped}.{f}"),
+        None => format!("{sign}{grouped}"),
+    }
+}
+
+/// A US-dollar amount in the display currency. Falls back to dollars when no rate
+/// was pushed, so a slow or failed FX fetch never blanks the tray.
+fn format_amount(copy: &TrayCopy, usd: f64) -> String {
+    match &copy.money {
+        Some(m) if m.rate.is_finite() && m.rate > 0.0 => {
+            format!("{}{}", m.symbol, group_thousands(usd * m.rate, m.decimals))
+        }
+        _ => format_usd(usd),
+    }
+}
+
 fn format_month_so_far(copy: &TrayCopy, value: Option<f64>, paired: bool) -> String {
     if !paired {
         return copy
@@ -292,7 +352,7 @@ fn format_month_so_far(copy: &TrayCopy, value: Option<f64>, paired: bool) -> Str
             .replace("{value}", &copy.not_paired);
     }
     let v = match value {
-        Some(v) => format_usd(v),
+        Some(v) => format_amount(copy, v),
         None => copy.no_data.clone(),
     };
     copy.month_so_far_template.replace("{value}", &v)
@@ -303,7 +363,7 @@ fn format_forecast(copy: &TrayCopy, value: Option<f64>, paired: bool) -> String 
         return copy.forecast_template.replace("{value}", &copy.not_paired);
     }
     let v = match value {
-        Some(v) => format_usd(v),
+        Some(v) => format_amount(copy, v),
         None => copy.no_data.clone(),
     };
     copy.forecast_template.replace("{value}", &v)
@@ -313,15 +373,16 @@ fn format_synced_ago(copy: &TrayCopy, seconds: Option<u64>) -> String {
     let Some(s) = seconds else {
         return copy.synced_never.clone();
     };
-    let age = if s < 60 {
-        format!("{s} s")
+    let (template, n) = if s < 60 {
+        (&copy.age_seconds_template, s)
     } else if s < 3600 {
-        format!("{} min", s / 60)
+        (&copy.age_minutes_template, s / 60)
     } else if s < 86_400 {
-        format!("{} hr", s / 3600)
+        (&copy.age_hours_template, s / 3600)
     } else {
-        format!("{} d", s / 86_400)
+        (&copy.age_days_template, s / 86_400)
     };
+    let age = template.replace("{n}", &n.to_string());
     copy.synced_ago_template.replace("{age}", &age)
 }
 
@@ -423,5 +484,73 @@ mod tests {
             ..TrayCopy::default()
         };
         assert_eq!(format_synced_ago(&copy, Some(120)), "已同步 2 min 前");
+    }
+
+    /// The units used to be English inside a translated sentence: the shipped
+    /// zh-CN template rendered "2 min前同步". They are pushed with the templates now.
+    #[test]
+    fn age_units_come_from_the_pushed_copy() {
+        let copy = TrayCopy {
+            synced_ago_template: "{age}前同步".into(),
+            age_seconds_template: "{n} 秒".into(),
+            age_minutes_template: "{n} 分钟".into(),
+            age_hours_template: "{n} 小时".into(),
+            age_days_template: "{n} 天".into(),
+            ..TrayCopy::default()
+        };
+        assert_eq!(format_synced_ago(&copy, Some(45)), "45 秒前同步");
+        assert_eq!(format_synced_ago(&copy, Some(120)), "2 分钟前同步");
+        assert_eq!(format_synced_ago(&copy, Some(7200)), "2 小时前同步");
+        assert_eq!(format_synced_ago(&copy, Some(172_800)), "2 天前同步");
+    }
+
+    /// Amounts used to be dollars whatever currency Settings showed everywhere else.
+    #[test]
+    fn amounts_use_the_display_currency() {
+        let copy = TrayCopy {
+            money: Some(MoneyFormat {
+                symbol: "¥".into(),
+                rate: 7.1,
+                decimals: 2,
+            }),
+            ..TrayCopy::default()
+        };
+        assert_eq!(
+            format_month_so_far(&copy, Some(200.0), true),
+            "Month so far: ¥1,420.00"
+        );
+        let yen = TrayCopy {
+            money: Some(MoneyFormat {
+                symbol: "JP¥".into(),
+                rate: 147.0,
+                decimals: 0,
+            }),
+            ..TrayCopy::default()
+        };
+        assert_eq!(
+            format_forecast(&yen, Some(12.5), true),
+            "Forecast: JP¥1,838"
+        );
+        // No usable rate: dollars, never a blank or NaN.
+        let broken = TrayCopy {
+            money: Some(MoneyFormat {
+                symbol: "€".into(),
+                rate: f64::NAN,
+                decimals: 2,
+            }),
+            ..TrayCopy::default()
+        };
+        assert_eq!(
+            format_forecast(&broken, Some(12.5), true),
+            "Forecast: $12.50"
+        );
+    }
+
+    #[test]
+    fn grouping_handles_small_large_and_negative_values() {
+        assert_eq!(group_thousands(0.5, 2), "0.50");
+        assert_eq!(group_thousands(999.999, 2), "1,000.00");
+        assert_eq!(group_thousands(1_234_567.0, 0), "1,234,567");
+        assert_eq!(group_thousands(-1234.5, 1), "-1,234.5");
     }
 }

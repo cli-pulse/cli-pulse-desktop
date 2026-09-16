@@ -2392,7 +2392,7 @@ fn maybe_notify_budget_breach(app: &tauri::AppHandle, alerts: &[alerts::Alert]) 
         }
         let key = a.suppression_key.clone().unwrap_or_else(|| a.id.clone());
         if seen.insert(key) {
-            notify::budget_breach(app, &a.title, &a.message);
+            notify::budget_breach(app, a);
         }
     }
 }
@@ -2873,10 +2873,26 @@ struct TrayCopyPayload {
     no_data: String,
     open_label: String,
     quit_label: String,
+    // Optional so a frontend that predates them still deserializes; the English
+    // defaults then apply.
+    age_seconds_template: Option<String>,
+    age_minutes_template: Option<String>,
+    age_hours_template: Option<String>,
+    age_days_template: Option<String>,
+    money: Option<MoneyFormatPayload>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MoneyFormatPayload {
+    symbol: String,
+    rate: f64,
+    decimals: usize,
 }
 
 impl From<TrayCopyPayload> for tray::TrayCopy {
     fn from(p: TrayCopyPayload) -> Self {
+        let d = tray::TrayCopy::default();
         Self {
             header_label: p.header_label,
             month_so_far_template: p.month_so_far_template,
@@ -2887,6 +2903,52 @@ impl From<TrayCopyPayload> for tray::TrayCopy {
             no_data: p.no_data,
             open_label: p.open_label,
             quit_label: p.quit_label,
+            age_seconds_template: p.age_seconds_template.unwrap_or(d.age_seconds_template),
+            age_minutes_template: p.age_minutes_template.unwrap_or(d.age_minutes_template),
+            age_hours_template: p.age_hours_template.unwrap_or(d.age_hours_template),
+            age_days_template: p.age_days_template.unwrap_or(d.age_days_template),
+            money: p.money.map(|m| tray::MoneyFormat {
+                symbol: m.symbol,
+                rate: m.rate,
+                decimals: m.decimals.min(4),
+            }),
+        }
+    }
+}
+
+/// Native notification text in the UI language (see `notify::NotificationCopy`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NotificationCopyPayload {
+    pair_title: String,
+    pair_body: String,
+    sync_paused_title: String,
+    sync_paused_lead: String,
+    signed_out_title: String,
+    signed_out_device_missing: String,
+    signed_out_account_missing: String,
+    signed_out_expired: String,
+    budget_daily_title: String,
+    budget_daily_body: String,
+    budget_weekly_title: String,
+    budget_weekly_body: String,
+}
+
+impl From<NotificationCopyPayload> for notify::NotificationCopy {
+    fn from(p: NotificationCopyPayload) -> Self {
+        Self {
+            pair_title: p.pair_title,
+            pair_body: p.pair_body,
+            sync_paused_title: p.sync_paused_title,
+            sync_paused_lead: p.sync_paused_lead,
+            signed_out_title: p.signed_out_title,
+            signed_out_device_missing: p.signed_out_device_missing,
+            signed_out_account_missing: p.signed_out_account_missing,
+            signed_out_expired: p.signed_out_expired,
+            budget_daily_title: p.budget_daily_title,
+            budget_daily_body: p.budget_daily_body,
+            budget_weekly_title: p.budget_weekly_title,
+            budget_weekly_body: p.budget_weekly_body,
         }
     }
 }
@@ -2895,9 +2957,13 @@ impl From<TrayCopyPayload> for tray::TrayCopy {
 fn force_tray_menu_refresh(
     app: tauri::AppHandle,
     copy: Option<TrayCopyPayload>,
+    notification: Option<NotificationCopyPayload>,
 ) -> Result<(), String> {
     if let Some(c) = copy {
         tray::set_copy(&app, c.into());
+    }
+    if let Some(n) = notification {
+        notify::set_copy(n.into());
     }
     tray::apply_metrics(&app, &collect_tray_metrics());
     Ok(())

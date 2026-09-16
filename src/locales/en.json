@@ -580,7 +580,11 @@
     "not_paired": "Not signed in",
     "no_data": "—",
     "open_label": "Open CLI Pulse",
-    "quit_label": "Quit"
+    "quit_label": "Quit",
+    "age_seconds_template": "{n} s",
+    "age_minutes_template": "{n} min",
+    "age_hours_template": "{n} hr",
+    "age_days_template": "{n} d"
   },
   "terminal": {
     "section_title": "Local terminal (beta)",
@@ -602,5 +606,19 @@
     "body": "The UI hit an unrecoverable error. Reporting this to the developer (paste the text below into a GitHub issue) will help fix it.",
     "component_stack": "Component stack",
     "recover": "Try to recover"
+  },
+  "notify": {
+    "pair_title": "CLI Pulse — Paired",
+    "pair_body": "Device “{device}” is now syncing with your phone.",
+    "sync_paused_title": "CLI Pulse — Sync paused",
+    "sync_paused_lead": "{count} consecutive sync failures.",
+    "signed_out_title": "CLI Pulse — Sign in again",
+    "signed_out_device_missing": "This device was removed from your account. Sign in again to re-pair.",
+    "signed_out_account_missing": "Your CLI Pulse account is no longer accessible. Sign in again to continue.",
+    "signed_out_expired": "Your sign-in expired. Please sign in again to keep syncing.",
+    "budget_daily_title": "Daily budget exceeded — {amount}",
+    "budget_daily_body": "Today's spend of {spend} is above your daily budget of {limit}.",
+    "budget_weekly_title": "Weekly budget exceeded — {amount}",
+    "budget_weekly_body": "Last 7 days of spend totals {spend}, above your weekly budget of {limit}."
   }
 }
