@@ -259,7 +259,7 @@
     "device_id": "デバイス ID",
     "user_id": "ユーザー ID",
     "helper_version": "Helper バージョン",
-    "pair_hint": "macOS の場合:CLI Pulse メニューバーアプリ → 設定 → 接続 → 「Sync をセットアップ」を開き、表示された 6 桁のコードを下のフィールドに入力してください。本セクション上部のメールサインインも利用できます。",
+    "pair_hint": "macOS の場合：CLI Pulse メニューバーアプリ → 設定 → 同期ステータス → 「クラウド同期をセットアップ」を開き、表示された 6 桁のコードを下のフィールドに入力してください。本セクション上部のメールサインインも利用できます。",
     "pairing_code": "ペアリングコード",
     "device_name_optional": "デバイス名 (任意)",
     "device_name_placeholder": "例: Jason の Surface",
