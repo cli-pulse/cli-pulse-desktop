@@ -80,7 +80,7 @@
     "tile_unresolved_alerts": "Unresolved alerts",
     "forecast_title": "Predicted month-end cost",
     "forecast_bounds": "{{lower}} – {{upper}} (±1σ)",
-    "forecast_based_on": "Based on {{count}} day of data",
+    "forecast_based_on_one": "Based on {{count}} day of data",
     "forecast_based_on_other": "Based on {{count}} days of data",
     "forecast_unreliable": "Need at least 3 days of usage for a reliable forecast",
     "forecast_failed": "Forecast unavailable — couldn't reach the server",
@@ -175,9 +175,11 @@
     "title": "Machine health",
     "load_failed": "Couldn't read machine metrics.",
     "loading": "Reading machine metrics…",
-    "process_count": "{{count}} processes",
+    "process_count_one": "{{count}} process",
+    "process_count_other": "{{count}} processes",
     "cpu": "CPU",
-    "cpu_cores": "{{count}} cores",
+    "cpu_cores_one": "{{count}} core",
+    "cpu_cores_other": "{{count}} cores",
     "memory": "Memory",
     "top_processes": "Top processes",
     "no_processes": "No processes to show.",
@@ -227,8 +229,8 @@
   },
   "alerts": {
     "nothing": "Nothing pressing — no active alerts.",
-    "active": "{{count}} active alert",
-    "active_plural": "{{count}} active alerts",
+    "active_one": "{{count}} active alert",
+    "active_other": "{{count}} active alerts",
     "empty_title": "All quiet 🌙",
     "empty_body": "Alerts fire when daily / weekly budgets are exceeded or when a single AI CLI process hits a CPU spike. Set your budget in <strong>Settings → Budget</strong>.",
     "filter_open": "Open",
@@ -253,7 +255,6 @@
     "device_id": "Device ID",
     "user_id": "User ID",
     "helper_version": "Helper version",
-    "pair_heading": "Pair this device",
     "pair_hint": "On macOS: open the CLI Pulse menu bar app → Settings → Connection → Set Up Sync, then type the 6-digit code shown there into the field below. Or sign in with email at the top of this section instead.",
     "pairing_code": "Pairing code",
     "device_name_optional": "Device name (optional)",
@@ -303,8 +304,6 @@
     "about_platform": "Platform",
     "about_paired_for": "Paired",
     "about_not_paired": "Not paired",
-    "about_last_scan": "Last scan",
-    "about_cached_files": "Cached files",
     "about_diagnostics_hint": "Copy this block when reporting an issue.",
     "about_copy_diagnostics": "Copy diagnostics",
     "about_copied": "Copied!",
@@ -447,7 +446,6 @@
     "available": "Found {{version}} — downloading…",
     "downloading": "Downloading {{pct}}%",
     "ready": "Update installed. Restart to apply.",
-    "error": "Update failed: {{error}}",
     "error_network": "Network error during update. Check your connection and try again. ({{error}})",
     "error_permissions": "Update needs more permission to write the new files. Try running as administrator. ({{error}})",
     "error_disk_full": "Not enough disk space to install the update. Free up some space and try again. ({{error}})",
@@ -469,8 +467,7 @@
     "budget_saved": "Budget saved.",
     "err_budget_nonneg": "Daily budget must be a non-negative number.",
     "err_weekly_nonneg": "Weekly budget must be a non-negative number.",
-    "err_cpu_range": "CPU threshold must be between 0 and 100.",
-    "err_code_empty": "Pairing code is empty"
+    "err_cpu_range": "CPU threshold must be between 0 and 100."
   },
   "auth": {
     "signin": {
@@ -494,7 +491,6 @@
     }
   },
   "misc": {
-    "provider_label": "provider: {{name}}",
     "project_label": "project: {{name}}",
     "session_label": "session: {{name}}",
     "device_label": "device: {{name}}",
@@ -510,7 +506,6 @@
   },
   "remote": {
     "title": "Remote Approvals",
-    "heading_pending": "Pending approvals",
     "empty_pending": "No approvals waiting.",
     "disabled_hint": "Remote Control is off. Enable in Settings → Privacy.",
     "row_unknown_device": "Unknown device",
@@ -529,7 +524,6 @@
     "badge_pending_count_other": "{{count, number}} pending",
     "badge_tooltip": "Open Remote Approvals",
     "sessions_heading": "Active managed sessions",
-    "sessions_readonly_badge": "Read-only preview",
     "sessions_empty": "No managed sessions running.",
     "session_status_pending": "pending",
     "session_status_running": "running",

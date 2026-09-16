@@ -222,7 +222,6 @@
   "alerts": {
     "nothing": "特に問題ありません — アクティブな通知はありません。",
     "active": "{{count}} 件のアクティブ通知",
-    "active_plural": "{{count}} 件のアクティブ通知",
     "empty_title": "静かなもの 🌙",
     "empty_body": "日次/週次の予算を超えた場合、または単一の AI CLI プロセスの CPU が急上昇した場合に通知が発生します。<strong>設定 → 予算</strong>で予算を設定できます。",
     "filter_open": "未対応",
@@ -247,7 +246,6 @@
     "device_id": "デバイス ID",
     "user_id": "ユーザー ID",
     "helper_version": "Helper バージョン",
-    "pair_heading": "このデバイスをペアリング",
     "pair_hint": "macOS の場合:CLI Pulse メニューバーアプリ → 設定 → 接続 → 「Sync をセットアップ」を開き、表示された 6 桁のコードを下のフィールドに入力してください。本セクション上部のメールサインインも利用できます。",
     "pairing_code": "ペアリングコード",
     "device_name_optional": "デバイス名 (任意)",
@@ -297,8 +295,6 @@
     "about_platform": "プラットフォーム",
     "about_paired_for": "ペアリング済み",
     "about_not_paired": "未ペアリング",
-    "about_last_scan": "最終スキャン",
-    "about_cached_files": "キャッシュ済みファイル",
     "about_diagnostics_hint": "問題を報告する際にこのブロックをコピーして添付してください。",
     "about_copy_diagnostics": "診断情報をコピー",
     "about_copied": "コピーしました!",
@@ -441,7 +437,6 @@
     "available": "{{version}} を発見 — ダウンロード中…",
     "downloading": "ダウンロード中 {{pct}}%",
     "ready": "アップデートをインストールしました。再起動で適用されます。",
-    "error": "アップデート失敗: {{error}}",
     "error_network": "アップデート中にネットワークエラーが発生しました。接続を確認して再試行してください。({{error}})",
     "error_permissions": "アップデートにより多くの権限が必要です。管理者として実行してみてください。({{error}})",
     "error_disk_full": "ディスク容量が不足しています。空き容量を確保して再試行してください。({{error}})",
@@ -463,8 +458,7 @@
     "budget_saved": "予算を保存しました。",
     "err_budget_nonneg": "日次予算は 0 以上の数値である必要があります。",
     "err_weekly_nonneg": "週次予算は 0 以上の数値である必要があります。",
-    "err_cpu_range": "CPU しきい値は 0 から 100 の間である必要があります。",
-    "err_code_empty": "ペアリングコードが空です"
+    "err_cpu_range": "CPU しきい値は 0 から 100 の間である必要があります。"
   },
   "auth": {
     "signin": {
@@ -488,7 +482,6 @@
     }
   },
   "misc": {
-    "provider_label": "プロバイダ: {{name}}",
     "project_label": "プロジェクト: {{name}}",
     "session_label": "セッション: {{name}}",
     "device_label": "デバイス: {{name}}",
@@ -504,7 +497,6 @@
   },
   "remote": {
     "title": "リモート承認",
-    "heading_pending": "承認待ちリクエスト",
     "empty_pending": "承認待ちはありません。",
     "disabled_hint": "リモート コントロールはオフです。「設定 → プライバシー」で有効化してください。",
     "row_unknown_device": "不明なデバイス",
@@ -519,11 +511,9 @@
     "action_failed": "操作に失敗しました:{{err}}",
     "error_already_decided": "別のデバイスで処理済み — リストを更新します。",
     "age_ago": "{{age}}前",
-    "badge_pending_count_one": "{{count, number}}件の承認待ち",
     "badge_pending_count_other": "{{count, number}}件の承認待ち",
     "badge_tooltip": "リモート承認を開く",
     "sessions_heading": "アクティブなリモート セッション",
-    "sessions_readonly_badge": "読み取り専用プレビュー",
     "sessions_empty": "現在実行中のリモート セッションはありません。",
     "session_status_pending": "待機中",
     "session_status_running": "実行中",
@@ -551,7 +541,6 @@
     "session_start_processing": "開始中…",
     "session_start_failed": "セッションを開始できませんでした:{{err}}",
     "agent_status_heading": "エージェント診断",
-    "agent_status_running_one": "{{count}} 個のセッションを実行中",
     "agent_status_running_other": "{{count}} 個のセッションを実行中",
     "agent_status_lifetime": "通算 {{count}} 個ホスト",
     "agent_status_last_tick": "最終ティック {{age}}前",

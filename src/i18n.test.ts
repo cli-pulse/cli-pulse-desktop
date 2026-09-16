@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { SUPPORTED_LANGS } from "./i18n";
 
 // We test the public surface of `./i18n` — language detection on first
 // load, persistence across calls, and `setLang`.
@@ -54,7 +55,7 @@ describe("i18n bootstrap", () => {
   });
 });
 
-describe("i18n covers all critical labels in all 3 languages", () => {
+describe("i18n covers all critical labels in every supported language", () => {
   // Every required key must resolve to a non-empty string in every
   // supported language. Catches accidentally-deleted keys before they
   // ship.
@@ -384,7 +385,6 @@ describe("i18n covers all critical labels in all 3 languages", () => {
     "remote.action_failed",
     "remote.error_already_decided",
     "remote.sessions_heading",
-    "remote.sessions_readonly_badge",
     "remote.sessions_empty",
     // v0.6.2 — managed-session control buttons. Pinning the
     // tooltip especially because it carries security-relevant
@@ -492,23 +492,41 @@ describe("i18n covers all critical labels in all 3 languages", () => {
     "terminal.provider_missing",
   ] as const;
 
-  it.each(["en", "zh-CN", "ja"] as const)(
+  // Reads each language's OWN resources. Resolving through `t()` could not
+  // fail for a non-English language: `fallbackLng` is "en", so a key missing
+  // from ja came back as the English string and passed.
+  it.each(SUPPORTED_LANGS.map((l) => l.code))(
     "language %s has every required key non-empty",
     async (lang) => {
       const mod = await freshI18n();
-      mod.setLang(lang);
-      for (const key of REQUIRED_KEYS) {
-        const v = mod.default.t(key);
-        expect(typeof v).toBe("string");
-        expect(v.length).toBeGreaterThan(0);
-        // Sanity: must not return the key path verbatim (= missing translation)
-        expect(v).not.toBe(key);
-      }
+      const own = (key: string) =>
+        mod.default.getResource(lang, "translation", key) ??
+        mod.default.getResource(lang, "translation", `${key}_other`);
+      const missing = REQUIRED_KEYS.filter((key) => {
+        const v = own(key);
+        return typeof v !== "string" || v.length === 0;
+      });
+      expect(missing).toEqual([]);
     }
   );
 });
 
 describe("i18n plural forms (v0.4.5)", () => {
+  // These used the i18next v3 `_plural` suffix or no plural at all, so English
+  // read "3 active alert", "1 cores" and "1 processes".
+  it("en alerts, cores, processes and forecast days pluralize", async () => {
+    const { default: i18n } = await freshI18n();
+    i18n.changeLanguage("en");
+    expect(i18n.t("alerts.active", { count: 1 })).toBe("1 active alert");
+    expect(i18n.t("alerts.active", { count: 3 })).toBe("3 active alerts");
+    expect(i18n.t("machine.cpu_cores", { count: 1 })).toBe("1 core");
+    expect(i18n.t("machine.cpu_cores", { count: 8 })).toBe("8 cores");
+    expect(i18n.t("machine.process_count", { count: 1 })).toBe("1 process");
+    expect(i18n.t("machine.process_count", { count: 412 })).toBe("412 processes");
+    expect(i18n.t("overview.forecast_based_on", { count: 1 })).toBe("Based on 1 day of data");
+    expect(i18n.t("overview.forecast_based_on", { count: 9 })).toBe("Based on 9 days of data");
+  });
+
   // v0.4.5 — Providers tab strings now route through i18next plural rules
   // ("1 active day" vs "2 active days", etc.). zh-CN / ja have a single
   // form per CLDR; en has _one + _other. These tests catch regressions
