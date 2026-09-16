@@ -87,6 +87,7 @@ import {
 import appIcon from "./assets/app-icon.png";
 import { LocalTerminal } from "./components/LocalTerminal";
 import "./App.css";
+import { collectorStatusLabel, planLabel, presentAlert, quotaTierLabel } from "./lib/displayMappers";
 
 // Multi-currency display: a context carrying `fmt(usd)` (converts a USD cost to
 // the user's chosen currency) plus the current currency + setter (for the
@@ -1956,8 +1957,8 @@ function RiskSignalsCard({ paired }: { paired: boolean }) {
                 severity={a.severity as Alert["severity"]}
               />
               <div className="flex-1 min-w-0">
-                <div className="font-medium truncate" title={a.title}>
-                  {a.title}
+                <div className="font-medium truncate" title={presentAlert(a, t).title}>
+                  {presentAlert(a, t).title}
                 </div>
                 {a.related_project_name && (
                   <div className="text-xs text-neutral-500 truncate">
@@ -3123,7 +3124,7 @@ function Providers({
                     const stx = statusByProvider.get(v.provider)?.status_text;
                     return stx ? (
                       <div className="text-xs text-neutral-400 mt-0.5 tabular-nums">
-                        {stx}
+                        {collectorStatusLabel(stx, t)}
                       </div>
                     ) : null;
                   })()}
@@ -3199,7 +3200,7 @@ function Providers({
                         <div key={tier.name} className="text-xs">
                           <div className="flex justify-between text-neutral-400 mb-0.5">
                             <span className="flex items-center gap-1.5">
-                              <span>{tier.name}</span>
+                              <span>{quotaTierLabel(tier.name, t)}</span>
                               {pace && paceMeta && (
                                 <span
                                   className={`text-[10px] ${paceMeta.className}`}
@@ -3334,12 +3335,13 @@ function Providers({
 // v0.3.4 — Plan-type badge. Matches the Mac convention: Free/free →
 // orange (signals "upgrade available"); anything else → emerald.
 function PlanBadge({ plan }: { plan: string }) {
+  const { t } = useTranslation();
   const isFree = plan.toLowerCase() === "free";
   const cls = isFree
     ? "border border-orange-700/60 text-orange-300 bg-orange-950/40"
     : "border border-emerald-700/60 text-emerald-300 bg-emerald-950/40";
   return (
-    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${cls}`}>{plan}</span>
+    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${cls}`}>{planLabel(plan, t)}</span>
   );
 }
 
@@ -8025,6 +8027,7 @@ function ServerAlertCard({
 }) {
   const { t } = useTranslation();
   const [showSnooze, setShowSnooze] = useState(false);
+  const shown = presentAlert(alert, t);
   const sev = alert.severity as Alert["severity"];
   const accent =
     alert.severity === "Critical"
@@ -8044,12 +8047,13 @@ function ServerAlertCard({
       <div className="flex items-start gap-3">
         <SeverityIcon severity={sev} />
         <div className="flex-1 min-w-0">
+          {/* Title and message re-rendered from the producer's English; the raw
+              type identifier ("Usage Spike") is no longer shown as a chip. */}
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold">{alert.title}</span>
-            <span className="text-xs text-neutral-500 font-mono">{alert.type}</span>
+            <span className="text-sm font-semibold">{shown.title}</span>
           </div>
-          {alert.message && (
-            <div className="text-sm text-neutral-300 mt-1">{alert.message}</div>
+          {shown.message && (
+            <div className="text-sm text-neutral-300 mt-1">{shown.message}</div>
           )}
           <div className="text-xs mt-2 flex flex-wrap items-center gap-2">
             {alert.related_provider && (
@@ -8139,6 +8143,7 @@ function ServerAlertCard({
 
 function AlertCard({ alert }: { alert: Alert }) {
   const { t } = useTranslation();
+  const shown = presentAlert(alert, t);
   const accent =
     alert.severity === "Critical"
       ? "border-red-800 bg-red-950/40"
@@ -8157,10 +8162,9 @@ function AlertCard({ alert }: { alert: Alert }) {
         <SeverityIcon severity={alert.severity} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold">{alert.title}</span>
-            <span className="text-xs text-neutral-500 font-mono">{alert.type}</span>
+            <span className="text-sm font-semibold">{shown.title}</span>
           </div>
-          <div className="text-sm text-neutral-300 mt-1">{alert.message}</div>
+          <div className="text-sm text-neutral-300 mt-1">{shown.message}</div>
           {/* v0.10.1 — related-entity chips. Surfaces session + device,
               which the wire shape already carried but the card never
               rendered; the provider chip carries its brand-color dot. */}

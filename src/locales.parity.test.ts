@@ -43,6 +43,8 @@ const DYNAMIC_PREFIXES = [
   "sessions.confidence_",
   "machine.batt_",
   "remote.session_status_",
+  // Tier names from the vendored cli-pulse manifest (lib/displayMappers.ts).
+  "quota_tier.",
 ];
 
 type Flat = Record<string, string>;

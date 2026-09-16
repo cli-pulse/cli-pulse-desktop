@@ -1,0 +1,390 @@
+{
+ "entries": [
+  {
+   "name": "4-hour",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.hours_4",
+   "reason": "Generic window length, numeral preserved. The desktop's windowMinutesForTier parses this literal, but that parse runs on the stored English value, which a display-only mapper never touches.",
+   "producers": "Swift T3ChatCollector; Swift ChutesCollector; Tauri t3chat.rs"
+  },
+  {
+   "name": "5-hour",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.hours_5",
+   "reason": "Generic window length; the numeral is preserved and only the unit word is localized. Same treatment as \"5h Window\" so the two spellings of one concept do not diverge across providers.",
+   "producers": "Swift StepFunCollector; Swift SakanaCollector; Tauri stepfun.rs"
+  },
+  {
+   "name": "5h Rate Limit",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.rate_limit_5h",
+   "reason": "Composed by KimiCollector from `rateLimitTotal`/`rateLimitUsed` — a duration plus the generic technical phrase \"rate limit\", which has an established translation in every locale. Preserve \"5h\" verbatim; nothing here is a Moonshot/Kimi product name.",
+   "producers": "Swift KimiCollector; Android KimiCollector; Tauri kimi.rs"
+  },
+  {
+   "name": "5h Window",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.window_5h",
+   "reason": "A time window this app named itself (no vendor calls it this — Codex's own helper path calls the same window \"Session\"), so a Japanese user gains nothing from the English and loses nothing on the billing page. The digit must survive and only the unit/noun localize (\"5時間ウィンドウ\"); translate strictly at the render site, since WatchRingMath and the desktop's windowMinutesForTier parse the stored name.",
+   "producers": "Swift ClaudeResultBuilder; Swift CodexCollector; Swift AlibabaCollector; Python helper (Claude OAuth); HelperSwift ClaudeQuotaFetcher; Android ClaudeCollector + CodexCollector + DemoDataProvider; Tauri desktop claude.rs/codex.rs/alibaba.rs"
+  },
+  {
+   "name": "AI Credits",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.ai_credits",
+   "reason": "Both halves are generic — \"AI\" stays verbatim as an initialism and \"Credits\" is the same generic unit noun translated everywhere else, so a mixed treatment would make JetBrains the odd provider out. JetBrains localizes its own product UI, so a localized form still matches their surfaces.",
+   "producers": "Swift JetBrainsAICollector"
+  },
+  {
+   "name": "Ark Plan",
+   "display": "PASSTHROUGH",
+   "reason": "\"Ark\" is Volcano Engine's product: a vendor product plus plan name that appears verbatim in their console, so translating any part of it obstructs reconciliation against their billing page.",
+   "producers": "Swift VolcanoEngineCollector; Android VolcanoEngineCollector; Tauri volcano.rs"
+  },
+  {
+   "name": "Billing Cycle",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.billing_cycle",
+   "reason": "Fully app-computed: ZedCollector derives it from `cycleStart`/`cycleEnd` via `billingCycleUsedPercent`, so it is this app's generic label for an elapsed-time window, not anything Zed sends. \"Billing cycle\" has an established translation everywhere.",
+   "producers": "Swift ZedCollector"
+  },
+  {
+   "name": "Bonus",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.bonus",
+   "reason": "The brief's own example of a generic bucket; here it is just the app's word for Perplexity's `promoTotal` promotional pool. Translates cleanly with no vendor-matching cost.",
+   "producers": "Swift PerplexityCollector; Tauri perplexity.rs"
+  },
+  {
+   "name": "Bonus Credits",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.bonus_credits",
+   "reason": "Composed by WarpCollector from `bonusGranted`/`bonusRemaining` — a generic promotional bucket plus the generic unit \"credits\", the same shape the brief cites as translatable. No SKU or product noun inside.",
+   "producers": "Swift WarpCollector; Tauri warp.rs"
+  },
+  {
+   "name": "Cash",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.cash_balance",
+   "reason": "From Moonshot's `cash` balance field — a generic balance type, not a currency code (the amount is separately formatted as USD). As with \"Voucher\", a localized rendering matches Moonshot's own non-English console better than English does.",
+   "producers": "Swift MoonshotCollector; Tauri moonshot.rs"
+  },
+  {
+   "name": "Characters",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.characters",
+   "reason": "Composed from ElevenLabs' `characterLimit`/`characterCount` — a plain count of text characters, a generic metric like \"Requests\" rather than a unit code. It already differs from ElevenLabs' current \"credits\" wording, so translating costs no reconciliation ability.",
+   "producers": "Swift ElevenLabsCollector; Tauri elevenlabs.rs"
+  },
+  {
+   "name": "Chat",
+   "display": "PASSTHROUGH",
+   "reason": "Copilot's `chat` entitlement, i.e. the Copilot Chat feature the user sees named in GitHub's UI. Translating a product feature noun would make the bar harder to match against Copilot's own quota page, so the prior decides it.",
+   "producers": "Swift CopilotCollector; Tauri copilot.rs"
+  },
+  {
+   "name": "CNY Balance",
+   "display": "PASSTHROUGH",
+   "reason": "Not a closed literal at all: DeepSeekCollector builds `\"\\(b.currency) Balance\"`, so \"EUR Balance\" or any other code the API returns can appear. A mapper keyed on exact literals would translate the two spellings we happen to have seen and pass the rest through, giving a list where some rows are localized and some are not.",
+   "producers": "Swift DeepSeekCollector via `\"\\(b.currency) Balance\"` - NOT a closed literal: the prefix is whatever currency code the DeepSeek API returns, so this is an open-ended family (\"<CURRENCY> Balance\"). Tauri deepseek.rs:141 does the same with format!.",
+   "composed_at_runtime": true,
+   "composed_from": "\\(b.currency) Balance"
+  },
+  {
+   "name": "Coding Plan",
+   "display": "PASSTHROUGH",
+   "reason": "MiniMax's product name, not a description: the collector hits `GET /v1/coding_plan/remains` and sets plan_type to the same string, so it is the subscription the user sees on MiniMax's own page.",
+   "producers": "Swift MiniMaxCollector; Tauri minimax.rs"
+  },
+  {
+   "name": "Compute Points",
+   "display": "PASSTHROUGH",
+   "reason": "This is Abacus.AI's proprietary unit of account as written on their own dashboard, so it behaves like a unit name under rules (c)/(d): a plausible literal translation (\"演算ポイント\") would stop matching the vendor's page while adding almost nothing over a transliteration. Single-provider literal, so passthrough is contained.",
+   "producers": "Swift AbacusCollector; Tauri abacus.rs"
+  },
+  {
+   "name": "Credits",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.credits",
+   "reason": "The same generic unit-of-account bucket shape as \"Bonus\": seven Swift collectors, Android and the desktop all apply it to unrelated providers' balances, so it cannot be any one vendor's SKU. \"Credits\" has a standard loanword/translation everywhere and translating it does not contradict any billing page.",
+   "producers": "Swift AugmentCollector, CodebuffCollector, CodexCollector, GrokCollector, KiloCollector, KimiK2Collector, QoderCollector; Android CodexCollector + AugmentCollector; Tauri augment/codebuff/codex/crof/grok/kilo/kimik2/openrouter"
+  },
+  {
+   "name": "Daily",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.daily",
+   "reason": "Generic time window; leaving it English while the \"Weekly\" bar beside it is localized would be visibly inconsistent on the same Windsurf card.",
+   "producers": "Swift WindsurfCollector; HelperSwift GeminiQuotaFetcher"
+  },
+  {
+   "name": "Daily Routines",
+   "display": "PASSTHROUGH",
+   "reason": "and the closer call of the two: it looks like generic English but is the app's name for a specific Claude feature window (payload key `seven_day_omelette`), and a literal translation would read as a description of the user's habits rather than a Claude feature. Same secondary point as \"Designs\": it gates alerting via the AlertGenerator Set<String> and is parsed by name in ClaudeHelperContract and system_collector.py, so display/value divergence buys nothing here.",
+   "producers": "Swift ClaudeResultBuilder; Swift ClaudeHelperContract; Python helper; Android ClaudeCollector; Tauri claude.rs"
+  },
+  {
+   "name": "Default",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.default",
+   "reason": "Synthetic and invented by this app at AppState.swift:2160 when a non-Claude provider reports an overall quota but no tiers — no vendor page anywhere says \"Default\", so it is the purest translate candidate in the set. Critical: localize ONLY at the render sites (ProvidersTab.swift:748, iOSProvidersTab.swift:411), never at line 2160, because UsageTier's `id` is its name and that string is the SwiftUI ForEach identity.",
+   "producers": "Swift AppState.buildProviderDetails - a SYNTHETIC tier invented in the app (not by any collector) when a non-Claude provider reports an overall quota but no per-tier data. It is rendered exactly like a collector tier AND is the UsageTier's `id`.; Android SupabaseClient (a server tier with no name)"
+  },
+  {
+   "name": "Designs",
+   "display": "PASSTHROUGH",
+   "reason": "this reads as Claude feature branding rather than generic English — the payload key is the codename `iguana_necktie` and the app chose \"Designs\" to name the Claude Design feature, so it is the label the user matches against Claude's own surfaces, where a literal \"デザイン\"/\"Diseños\" would read as an ordinary noun. Secondary: it is an alert gate in AlertGenerator's Set<String> and a parsed key in ClaudeHelperContract and system_collector.py, so keeping display identical to the value also keeps the bar consistent with the English alert title built at AlertGenerator.swift:283.",
+   "producers": "Swift ClaudeResultBuilder; Swift ClaudeHelperContract (snapshot extra_tiers writer); Python helper; Android ClaudeCollector; Tauri claude.rs"
+  },
+  {
+   "name": "DIEM Balance",
+   "display": "PASSTHROUGH",
+   "reason": "\"DIEM\" is Venice's proprietary allowance token, and the decisive point is family consistency: the sibling \"<currency> Balance\" strings cannot be localized by a closed-set mapper at all, so translating only this one would leave a half-localized column of balance rows. Treating the whole \"… Balance\" family as passthrough is the only self-consistent choice.",
+   "producers": "Swift VeniceCollector (two branches); Tauri venice.rs"
+  },
+  {
+   "name": "Edit Predictions",
+   "display": "PASSTHROUGH",
+   "reason": "\"Edit predictions\" is Zed's named feature and the exact wording on Zed's usage/billing page, which is where a user would reconcile this bar. Conservative prior keeps product feature names in English.",
+   "producers": "Swift ZedCollector (two call sites, same literal)"
+  },
+  {
+   "name": "Extra Usage",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.extra_usage",
+   "reason": "Generic overage bucket derived from Anthropic's generic API field `extra_usage` (monthly_limit/used_credits), and our capitalization already differs from Anthropic's prose, so it is our label rather than a SKU.",
+   "producers": "Python helper ONLY (Claude overage credits). Round-trips back out of the tier list into `snapshot[\"extra_usage\"]` at helper/system_collector.py:681.",
+   "scanner_blind_spot": true
+  },
+  {
+   "name": "Flash",
+   "display": "PASSTHROUGH",
+   "reason": "A Gemini model name. Localized, \"Flash\" becomes a weather or camera word and the row stops identifying a model. Keep verbatim alongside \"Pro\" and \"Flash Lite\".",
+   "producers": "Swift GeminiCollector classifyModel; Python helper Gemini parse; Tauri gemini.rs classify_model"
+  },
+  {
+   "name": "Flash Lite",
+   "display": "PASSTHROUGH",
+   "reason": "A Gemini model name — a two-word model identifier with no generic half to localize; translating \"Lite\" would desync it from Google's model naming.",
+   "producers": "Swift GeminiCollector classifyModel; Python helper Gemini parse; Tauri gemini.rs classify_model"
+  },
+  {
+   "name": "Key Limit",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.key_limit",
+   "reason": "Composed by OpenRouterCollector from the generic `keyInfo.limit` field (\"If key-level limit exists, add as a separate tier\"); OpenRouter's own UI says \"credit limit\", so the phrasing is already this app's. Two generic technical words, no branding risk.",
+   "producers": "Swift OpenRouterCollector; Tauri openrouter.rs"
+  },
+  {
+   "name": "Kilo Pass",
+   "display": "PASSTHROUGH",
+   "reason": "The vendor's product name carries the vendor noun (\"Kilo\") and \"Pass\" is part of that SKU, not a qualifier this app bolted on — unlike \"Sonnet only\", there is no generic half to translate without mangling the product name. Keeping it verbatim is what lets the user match it to Kilo's subscription line.",
+   "producers": "Swift KiloCollector; Tauri kilo.rs"
+  },
+  {
+   "name": "Monthly",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.monthly",
+   "reason": "Generic time window chosen by six unrelated collectors; no vendor dashboard string is at risk. Translating is a straight win for a non-English reader scanning which pool resets when.",
+   "producers": "Swift AlibabaCollector, ManusCollector, T3ChatCollector, ChutesCollector, OpenCodeGoCollector, CommandCodeCollector; Tauri alibaba.rs/manus.rs/t3chat.rs"
+  },
+  {
+   "name": "On-Demand",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.on_demand",
+   "reason": "A generic billing-mode term (usage beyond the included pool) rather than a named product, and every localized console renders it in-language or transliterated, so the billing-page match survives. Localize together with \"Plan\" to avoid a half-translated Cursor row.",
+   "producers": "Swift CursorCollector; Android CursorCollector; Tauri cursor.rs"
+  },
+  {
+   "name": "Open Source",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.open_source",
+   "reason": "A widely-known generic term with established localizations, used here to name a credit pool rather than a product, and it belongs with the localized \"Monthly\"/\"Purchased\" pools in Command Code's list. It does create one visible seam — \"Premium\" in that same list passes through — which is acceptable because the reasons differ (vendor plan label vs. generic description).",
+   "producers": "Swift CommandCodeCollector (credit pool)"
+  },
+  {
+   "name": "Opus (Weekly)",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.opus_weekly",
+   "reason": "Mixed name: \"Opus\" is a Claude model and stays byte-identical inside the string; \"(Weekly)\" is a generic window qualifier and should localize (e.g. \"Opus (週間)\"). Anthropic's usage panel scopes this limit by model, so preserving the model noun is exactly what keeps the row matchable.",
+   "producers": "Python helper (OAuth `seven_day_opus` and the `claude /usage` CLI name_map); Android ClaudeCollector",
+   "scanner_blind_spot": true
+  },
+  {
+   "name": "Opus only",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.opus_only",
+   "reason": "Same mixed shape: keep \"Opus\" verbatim, localize \"only\". Emitted only by HelperSwift ClaudeQuotaFetcher, so it must be in the mapper alongside \"Sonnet only\" and \"Opus (Weekly)\" or the same window reads localized on one machine and English on another.",
+   "producers": "HelperSwift ClaudeQuotaFetcher ONLY (weekly_opus). No other producer emits this spelling - the in-app Swift path says \"Sonnet only\" and the Python/Android paths say \"Opus (Weekly)\".",
+   "scanner_blind_spot": true
+  },
+  {
+   "name": "Other",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.other_models",
+   "reason": "Synthetic: the desktop's Gemini classify_model fallback bucket, invented when no model matched. No vendor supplies it and it means only \"everything else\", so it is passed through rather than given a translation that would imply a real bucket.",
+   "producers": "Tauri desktop ONLY - gemini.rs classify_model's fallback bucket (the Swift and Python paths instead fall back to the raw model id).",
+   "scanner_blind_spot": true
+  },
+  {
+   "name": "Overall",
+   "display": "PASSTHROUGH",
+   "reason": "Synthetic, and it never reaches a render site: AlertGenerator invents it for a provider with no per-tier data, so it lands only in the alert id, suppression_key and message text and never enters `provider.tiers`. There is nothing to localize, and giving it a translation would risk it leaking into a suppression key.",
+   "producers": "Swift AlertGenerator - a SYNTHETIC tier name used when a provider has no per-tier data, so it lands in the alert stableID / suppression_key and in the alert title/message text.",
+   "scanner_blind_spot": true
+  },
+  {
+   "name": "Plan",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.plan_included",
+   "reason": "Here \"Plan\" labels Cursor's included-spend pool — a generic bucket, not a named SKU, since the actual plan name travels separately in plan_type. Translating also keeps it paired correctly with the localized \"On-Demand\" bar beneath it.",
+   "producers": "Swift CursorCollector; Android CursorCollector; Tauri cursor.rs"
+  },
+  {
+   "name": "Premium",
+   "display": "PASSTHROUGH",
+   "reason": "It is a vendor bucket label the user reads verbatim on a billing page (GitHub's \"premium requests\"; Command Code's premium credit pool), and \"Premium\" is conventionally left untranslated in shipped ja/es consumer UIs. One literal serving two unrelated providers with different meanings also means no single translated phrase would be right for both.",
+   "producers": "Swift CopilotCollector (Copilot premium requests); Swift CommandCodeCollector (a credit pool - same literal, different meaning); Tauri copilot.rs"
+  },
+  {
+   "name": "Pro",
+   "display": "PASSTHROUGH",
+   "reason": "A Gemini model tier: classifyModel buckets model ids into Pro/Flash/Flash Lite, so this names the model the quota belongs to, not a window.",
+   "producers": "Swift GeminiCollector model-family classifier (both the primary buckets path and the dark-fallback mapSnapshot path); Python helper Gemini quota parse; Tauri gemini.rs classify_model"
+  },
+  {
+   "name": "Professional voices",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.professional_voices",
+   "reason": "Also sentence-case, i.e. a description of a count rather than ElevenLabs' capitalized feature branding, and a localized form reads naturally beside the localized \"Voice slots\". If a locale prefers the vendor's own feature wording, that is a translator-level choice, not a reason to leave English at the render site.",
+   "producers": "Swift ElevenLabsCollector; Tauri elevenlabs.rs (lowercase 'voices')"
+  },
+  {
+   "name": "Purchased",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.purchased",
+   "reason": "A generic past-participle bucket label used by two unrelated collectors (Perplexity, Command Code), which confirms it is app vocabulary; leaving it English would strand it beside a localized \"Bonus\"/\"Monthly\".",
+   "producers": "Swift PerplexityCollector; Swift CommandCodeCollector; Tauri perplexity.rs"
+  },
+  {
+   "name": "Quota",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.quota_fallback",
+   "reason": "Synthetic: Android's GeminiCollector default when a bucket has no quotaBucketName — invented by us, vendor-neutral, and content-free in English. Note the sibling path uses the RAW quotaBucketName verbatim (Android never classifies into Pro/Flash/Flash Lite), so that open-ended family must pass through unchanged and only this exact placeholder is mapped.",
+   "producers": "Android GeminiCollector - the default when the bucket has no `quotaBucketName`. Otherwise Android uses the RAW `quotaBucketName` verbatim (open-ended, and unlike Swift/Python it does NOT classify into Pro/Flash/Flash Lite).",
+   "scanner_blind_spot": true
+  },
+  {
+   "name": "Recurring",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.recurring",
+   "reason": "A generic description of Perplexity's monthly-renewing credit pool that only makes sense as the localized counterpart to \"Bonus\" and \"Purchased\" in the same list. A bare English adjective is the least defensible thing to leave untranslated.",
+   "producers": "Swift PerplexityCollector; Tauri perplexity.rs"
+  },
+  {
+   "name": "Refresh",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.refresh_credits",
+   "reason": "A generic description of Manus's periodically-refilling credit pool — the collector even derives a sibling label from the API's refreshInterval — so it is app vocabulary, not a product name. A lone English verb-noun is exactly the kind of label that reads as a bug in a localized UI.",
+   "producers": "Swift ManusCollector; Tauri manus.rs"
+  },
+  {
+   "name": "Requests",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.requests",
+   "reason": "A generic metric, emitted by three unrelated collectors (Crof, Vertex AI, Warp) — which is itself evidence it is this app's vocabulary rather than any one vendor's.",
+   "producers": "Swift CrofCollector, VertexAICollector, WarpCollector; Tauri crof.rs/warp.rs"
+  },
+  {
+   "name": "Rolling",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.rolling_window",
+   "reason": "Produced by OpenCodeGoCollector's own `windowTier()` helper alongside \"Weekly\" and \"Monthly\" from a `rollingUsedPercent` field, so it is this app's description of a window type rather than a vendor label. Translate as a window-type word, not as a verb.",
+   "producers": "Swift OpenCodeGoCollector"
+  },
+  {
+   "name": "Session",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.session",
+   "reason": "Generic word for a usage window, invented by the Python/HelperSwift Codex path for exactly the window the in-app Swift collector calls \"5h Window\" — two app-chosen spellings for one concept, so neither is a vendor string. Both are live in production depending on which helper owns the socket, so both need the mapper or the user sees a mixed-language column.",
+   "producers": "Python helper ONLY for Codex primary_window, plus HelperSwift CodexQuotaFetcher (its Python-parity port). NOT emitted by the in-app Swift CodexCollector, which calls the same window \"5h Window\".",
+   "scanner_blind_spot": true
+  },
+  {
+   "name": "Sonnet (Weekly)",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.sonnet_weekly",
+   "reason": "MIXED: \"Sonnet\" verbatim, \"Weekly\" translated, parenthesis preserved — identical treatment to \"Opus (Weekly)\". Leaving these two English while the plain \"Weekly\" bar above them is localized would be the worst of both worlds.",
+   "producers": "Python helper (OAuth `seven_day_sonnet` and the CLI name_map); Android ClaudeCollector",
+   "scanner_blind_spot": true
+  },
+  {
+   "name": "Sonnet only",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.sonnet_only",
+   "reason": "Mixed name: \"Sonnet\" is a Claude model name and must be preserved verbatim inside the translated string (e.g. \"Sonnet のみ\"), while \"only\" is a generic qualifier this app added. Note the producer uses this label for both sonnetUsed and opusUsed (`sonnetUsed ?? opusUsed`), so the visible model noun can already be wrong — translation neither fixes nor worsens that.",
+   "producers": "Swift ClaudeResultBuilder (used for BOTH sonnetUsed and opusUsed - `snapshot.sonnetUsed ?? snapshot.opusUsed`); Tauri desktop claude.rs"
+  },
+  {
+   "name": "Tariff Credits",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.tariff_credits",
+   "reason": "Generic secondary credit bucket read from the API's `tariffQuota.available`; \"tariff\" here means \"the plan you are on\", which is precisely the kind of awkward English a non-English reader benefits from seeing localized. Translation should convey \"credits included with your subscription\", not the customs-duty sense.",
+   "producers": "Swift JetBrainsAICollector"
+  },
+  {
+   "name": "Time",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.time_limit",
+   "reason": "Generic label mapped by our own switch from Z.ai's `TIME_LIMIT`, so again the English is ours. Bare \"Time\" is terse enough that the translation should convey \"time-based limit\" rather than the clock noun.",
+   "producers": "Swift ZaiCollector (maps server `TIME_LIMIT`); Tauri zai.rs tier_name()"
+  },
+  {
+   "name": "Token Plan",
+   "display": "PASSTHROUGH",
+   "reason": "It names the vendor's purchased package (Alibaba Bailian's token package, reused by MiMo) — a product the user reconciles against a purchase record, not a window or metric. A generic translation risks a wording the vendor's console never uses; only confident knowledge of the vendor's own localized SKU name would justify revisiting this.",
+   "producers": "Swift AlibabaTokenPlanCollector; Swift MiMoCollector"
+  },
+  {
+   "name": "Tokens",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.tokens",
+   "reason": "Generic unit of consumption, mapped by OUR switch from Z.ai's opaque `TOKENS_LIMIT` — the visible word is our choice, not the vendor's string. Note the sibling `default: name = limit.type` arm, so any future limit kind arrives raw and must pass through untouched.",
+   "producers": "Swift ZaiCollector (maps server `TOKENS_LIMIT`); Tauri zai.rs tier_name()"
+  },
+  {
+   "name": "USD Balance",
+   "display": "PASSTHROUGH",
+   "reason": "Contains a currency code, and DeepSeek also produces this shape by interpolation, so treating it as a closed literal would translate one currency and leave every other one English.",
+   "producers": "Swift VeniceCollector (literal); Swift DeepSeekCollector (interpolated when currency == \"USD\"); Tauri venice.rs/deepseek.rs"
+  },
+  {
+   "name": "Voice slots",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.voice_slots",
+   "reason": "A generic count of allotted slots, and the app's sentence-case spelling (lowercase \"slots\") shows it was authored here as a description rather than copied as branding. It must be localized together with \"Characters\" in the same ElevenLabs card.",
+   "producers": "Swift ElevenLabsCollector; Tauri elevenlabs.rs (note the lowercase 's' in 'slots')"
+  },
+  {
+   "name": "Voucher",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.voucher_balance",
+   "reason": "Generic balance bucket from Moonshot's `voucher` field, paired with \"Cash\"; Moonshot's own Chinese console says 代金券, so a localized label matches the vendor page better than the English does. Translate with \"Cash\" or the balance card ends up bilingual.",
+   "producers": "Swift MoonshotCollector; Tauri moonshot.rs"
+  },
+  {
+   "name": "Weekly",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.weekly",
+   "reason": "Pure generic time window, emitted by nine unrelated collectors, which is itself evidence it is our描述 and not any vendor's label. Safe ONLY because the mapping is display-only: WatchRingMath.swift:285's localizedCaseInsensitiveContains(\"week\") is the sole working weekly detector (role is never populated), so it must keep seeing the stored English.",
+   "producers": "Swift ClaudeResultBuilder, CodexCollector, AlibabaCollector, CodebuffCollector, KimiCollector, StepFunCollector, WindsurfCollector, OpenCodeGoCollector, SakanaCollector; Python helper (Claude + Codex); HelperSwift Claude+Codex fetchers; Android ClaudeCollector + CodexCollector + KimiCollector + DemoDataProvider; Tauri claude/codex/alibaba/kimi/stepfun/codebuff"
+  },
+  {
+   "name": "Window",
+   "display": "TRANSLATE",
+   "l10n_key": "quota_tier.window_fallback",
+   "reason": "Synthetic: Android's legacy usage_windows fallback when the payload has no window_name, so it is an app-invented placeholder with essentially no information content — localizing it is at least as useful as the English. It reaches Apple render sites via the shared cloud rows, so the Apple mapper needs it; the non-default case (whatever string the server sent) stays an open set and must pass through.",
+   "producers": "Android ClaudeCollector legacy `usage_windows` fallback - the default when the payload's `window_name` is absent. Otherwise the tier name is whatever string the server sent (open-ended).",
+   "scanner_blind_spot": true
+  }
+ ]
+}
