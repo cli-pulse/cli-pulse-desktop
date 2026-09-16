@@ -88,6 +88,7 @@ import appIcon from "./assets/app-icon.png";
 import { LocalTerminal } from "./components/LocalTerminal";
 import "./App.css";
 import { collectorStatusLabel, planLabel, presentAlert, quotaTierLabel } from "./lib/displayMappers";
+import { describeError } from "./lib/commandErrors";
 
 // Multi-currency display: a context carrying `fmt(usd)` (converts a USD cost to
 // the user's chosen currency) plus the current currency + setter (for the
@@ -493,7 +494,7 @@ export default function App() {
       const result = await invoke<ScanResult>("scan_usage", { days: rangeDays });
       setScan(result);
     } catch (e: any) {
-      setError(String(e));
+      setError(describeError(e, t));
     } finally {
       setLoading(false);
     }
@@ -1784,7 +1785,7 @@ function CostForecastCard({ paired }: { paired: boolean }) {
         setError(null);
       } catch (e: any) {
         if (cancelled) return;
-        setError(String(e));
+        setError(describeError(e, t));
       } finally {
         if (!cancelled) setLoaded(true);
       }
@@ -1905,7 +1906,7 @@ function RiskSignalsCard({ paired }: { paired: boolean }) {
         // transient error — keep the last good list visible
         // (slightly stale > totally absent). Surface the error
         // separately so the card can show an offline indicator.
-        setError(String(e));
+        setError(describeError(e, t));
       } finally {
         if (!cancelled) setLoaded(true);
       }
@@ -2027,7 +2028,7 @@ function TopProjectsCard({ paired }: { paired: boolean }) {
         setError(null);
       } catch (e: any) {
         if (cancelled) return;
-        setError(String(e));
+        setError(describeError(e, t));
       } finally {
         if (!cancelled) setLoaded(true);
       }
@@ -2642,7 +2643,7 @@ function Providers({
       setServerError(null);
     } catch (e: any) {
       setServerRows(null);
-      setServerError(String(e));
+      setServerError(describeError(e, t));
     }
   }, []);
 
@@ -2675,7 +2676,7 @@ function Providers({
       .catch((e: any) => {
         if (!cancelled) {
           setServerRows(null);
-          setServerError(String(e));
+          setServerError(describeError(e, t));
         }
       });
     invoke<CollectorStatus[]>("get_last_collector_status")
@@ -2720,7 +2721,7 @@ function Providers({
         setCollectorStatus(status);
       } catch (e: any) {
         if (cancelled) return;
-        setServerError(String(e));
+        setServerError(describeError(e, t));
       }
     };
     const id = setInterval(tick, 30_000);
@@ -2745,7 +2746,7 @@ function Providers({
       await invoke("sync_now");
       await Promise.all([fetchSummary(), fetchCollectorStatus()]);
     } catch (e: any) {
-      setServerError(String(e));
+      setServerError(describeError(e, t));
     } finally {
       setRefreshing(false);
     }
@@ -3429,7 +3430,7 @@ function Settings({
       setOtpStage("code");
       setResendCooldown(30);
     } catch (err: any) {
-      setMsg({ kind: "err", text: String(err) });
+      setMsg({ kind: "err", text: describeError(err, t) });
     } finally {
       setBusy(false);
     }
@@ -3459,7 +3460,7 @@ function Settings({
       setOtpStage("signed-in");
       await onPaired();
     } catch (err: any) {
-      setMsg({ kind: "err", text: String(err) });
+      setMsg({ kind: "err", text: describeError(err, t) });
     } finally {
       setBusy(false);
     }
@@ -3473,7 +3474,7 @@ function Settings({
       await invoke("auth_send_otp", { email: otpEmail.trim() });
       setResendCooldown(30);
     } catch (err: any) {
-      setMsg({ kind: "err", text: String(err) });
+      setMsg({ kind: "err", text: describeError(err, t) });
     } finally {
       setBusy(false);
     }
@@ -3501,7 +3502,7 @@ function Settings({
       setCode("");
       await onPaired();
     } catch (e: any) {
-      setMsg({ kind: "err", text: String(e) });
+      setMsg({ kind: "err", text: describeError(e, t) });
     } finally {
       setBusy(false);
     }
@@ -3524,7 +3525,7 @@ function Settings({
       setOtpCode("");
       await onUnpaired();
     } catch (e: any) {
-      setMsg({ kind: "err", text: String(e) });
+      setMsg({ kind: "err", text: describeError(e, t) });
     } finally {
       setBusy(false);
     }
@@ -3545,7 +3546,7 @@ function Settings({
         }),
       });
     } catch (e: any) {
-      setMsg({ kind: "err", text: String(e) });
+      setMsg({ kind: "err", text: describeError(e, t) });
     } finally {
       setBusy(false);
     }
@@ -3956,7 +3957,7 @@ function IntegrationsSection() {
       const v = await invoke<ProviderCredsView>("get_provider_creds");
       setView(v);
     } catch (e: any) {
-      setError(String(e));
+      setError(describeError(e, t));
     }
   }
 
@@ -3978,7 +3979,7 @@ function IntegrationsSection() {
         return next;
       });
     } catch (e: any) {
-      setError(String(e));
+      setError(describeError(e, t));
     } finally {
       setSavingField(null);
     }
@@ -4837,7 +4838,7 @@ function DangerZoneSection({
         setState((cur) => (cur.kind === "done-clear" ? { kind: "idle" } : cur));
       }, 2500);
     } catch (e: any) {
-      setState({ kind: "done-clear-error", error: String(e) });
+      setState({ kind: "done-clear-error", error: describeError(e, t) });
     }
   }
 
@@ -4858,7 +4859,7 @@ function DangerZoneSection({
       // RPC error: the SERVER STATE IS UNCHANGED (we ordered RPC
       // first; on failure the local clear didn't run either). User
       // can retry, no recovery action needed.
-      setState({ kind: "done-delete-error", error: String(e) });
+      setState({ kind: "done-delete-error", error: describeError(e, t) });
     }
   }
 
@@ -5094,7 +5095,7 @@ function RemoteApprovalsSheet({
       if (msg.includes("ALREADY_DECIDED")) {
         setError(t("remote.error_already_decided"));
       } else {
-        setError(t("remote.action_failed", { err: msg }));
+        setError(t("remote.action_failed", { err: describeError(e, t) }));
       }
       // Revert hidden — let the parent refresh repopulate. If the
       // request really IS gone (race), it won't come back; if it's
@@ -5326,7 +5327,7 @@ function RemotePrivacySection({
     try {
       await onSetEnabled(false);
     } catch (e: any) {
-      setError(t("remote.action_failed", { err: String(e) }));
+      setError(t("remote.action_failed", { err: describeError(e, t) }));
     }
   };
 
@@ -5336,7 +5337,7 @@ function RemotePrivacySection({
     try {
       await onSetEnabled(true);
     } catch (e: any) {
-      setError(t("remote.action_failed", { err: String(e) }));
+      setError(t("remote.action_failed", { err: describeError(e, t) }));
     }
   };
 
@@ -5502,7 +5503,7 @@ function ClaudeHookInstaller() {
     } catch (e: any) {
       // Resolution failures (no home dir etc.) are rare; surface
       // but don't block the rest of the Privacy section.
-      setError(t("settings.hook_install_status_failed", { err: String(e) }));
+      setError(t("settings.hook_install_status_failed", { err: describeError(e, t) }));
     }
   }, [t]);
 
@@ -5518,7 +5519,7 @@ function ClaudeHookInstaller() {
       setLastResult(result);
       await refreshStatus();
     } catch (e: any) {
-      setError(t("settings.hook_install_failed", { err: String(e) }));
+      setError(t("settings.hook_install_failed", { err: describeError(e, t) }));
     } finally {
       setInstalling(false);
     }
@@ -5665,7 +5666,7 @@ function SpawnSessionLauncher({ onSpawned }: { onSpawned: () => Promise<void> })
       await onSpawned();
       close();
     } catch (err: any) {
-      setError(String(err));
+      setError(describeError(err, t));
       setSubmitting(false);
     }
   };
@@ -5860,7 +5861,7 @@ function RemoteSessionsSection({
       setMode(sessionId, { kind: "idle" });
       await onActionDone();
     } catch (e: any) {
-      setMode(sessionId, { kind: "error", message: String(e) });
+      setMode(sessionId, { kind: "error", message: describeError(e, t) });
       await onActionDone();
     }
   };
@@ -6122,7 +6123,7 @@ function SaveDiagnosticBundleButton() {
       }
     } catch (e: any) {
       if (mountedRef.current) {
-        setStatus({ kind: "error", msg: String(e) });
+        setStatus({ kind: "error", msg: describeError(e, t) });
         setTimeout(() => {
           if (mountedRef.current) setStatus("idle");
         }, 6000);
@@ -6914,7 +6915,7 @@ function ActivityTimelineChart() {
       </div>
       {state.kind === "stale" && (
         <div className="text-xs text-amber-400">
-          {t("sessions.timeline_stale", { error: state.error })}
+          {t("sessions.timeline_stale", { error: describeError(state.error, t) })}
         </div>
       )}
       {state.kind === "loading" && (
@@ -6929,7 +6930,7 @@ function ActivityTimelineChart() {
       )}
       {state.kind === "error" && (
         <div className="text-xs text-red-400">
-          {t("sessions.timeline_failed", { error: state.error })}
+          {t("sessions.timeline_failed", { error: describeError(state.error, t) })}
         </div>
       )}
       {(state.kind === "loaded" || state.kind === "stale") && (
@@ -7314,7 +7315,7 @@ function FleetHealth({ currentDeviceId }: { currentDeviceId: string | null }) {
         setError(null);
       } catch (e) {
         if (cancelled) return;
-        setError(String(e));
+        setError(describeError(e, t));
       }
     };
     tick();
@@ -7417,7 +7418,7 @@ function MachineTab({
         setError(null);
       } catch (e) {
         if (cancelled) return;
-        setError(String(e));
+        setError(describeError(e, t));
       }
     };
     tick();
@@ -7644,7 +7645,7 @@ function Swarm({
         setError(null);
       } catch (e: any) {
         if (cancelled) return;
-        setError(String(e));
+        setError(describeError(e, t));
       }
     };
     tick();
@@ -7879,7 +7880,7 @@ function ServerAlertsPanel() {
       setAlerts(a);
       setError(null);
     } catch (e: any) {
-      setError(String(e));
+      setError(describeError(e, t));
     }
   }, []);
 
@@ -7913,7 +7914,7 @@ function ServerAlertsPanel() {
       await fn();
       await refresh();
     } catch (e: any) {
-      setError(String(e));
+      setError(describeError(e, t));
     } finally {
       setBusy((b) => {
         const n = new Set(b);
@@ -7928,7 +7929,7 @@ function ServerAlertsPanel() {
       try {
         await invoke("resolve_alert", { id: a.id });
       } catch (e: any) {
-        setError(String(e));
+        setError(describeError(e, t));
       }
     }
     await refresh();

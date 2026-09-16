@@ -671,5 +671,27 @@
   "collector_status": {
     "connected": "接続済み",
     "unknown": "不明"
+  },
+  "errors": {
+    "sign_in_required": "表示するにはサインインしてください。",
+    "session_expired": "サインインの有効期限が切れました。再度サインインしてください。",
+    "rate_limited": "試行回数が多すぎます。1 分ほど待ってから、もう一度お試しください。",
+    "invalid_code": "コードが無効か、有効期限が切れています。",
+    "network": "ネットワークエラー：{{detail}}",
+    "email_empty": "メールアドレスを入力してください。",
+    "email_or_code_empty": "メールアドレスとコードを入力してください。",
+    "pairing_code_empty": "ペアリングコードを入力してください。",
+    "prompt_empty": "送信するプロンプトを入力してください。",
+    "not_paired_budgets": "予算を設定する前に、このデバイスをペアリングしてください。",
+    "not_paired": "このデバイスはまだペアリングされていません。",
+    "keychain_unavailable": "OS のキーチェーンを利用できません。Linux では libsecret（gnome-keyring や kwalletd など）をインストールしてください。ヘッドレスサーバーでは Mac のペアリング手順を使ってください。",
+    "keychain": "キーチェーンのエラー：{{detail}}",
+    "server_http": "サーバーでエラーが発生しました（HTTP {{status}}）：{{detail}}",
+    "auth_http": "サインインに失敗しました（HTTP {{status}}）：{{detail}}",
+    "too_many_terminals": "開いているローカルターミナルが多すぎます（最大 {{max}} 個）。",
+    "no_downloads_dir": "ダウンロードフォルダーが見つかりません。",
+    "invalid_export_filename": "エクスポートのファイル名が無効です。",
+    "wipe_cache_failed": "スキャンキャッシュを消去できませんでした：{{detail}}",
+    "no_home_dir": "ホームフォルダーが見つかりません。"
   }
 }
