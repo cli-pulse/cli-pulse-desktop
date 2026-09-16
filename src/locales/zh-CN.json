@@ -92,7 +92,11 @@
     "top_projects_title": "热门项目(近 30 天)",
     "top_projects_unknown": "(无项目)",
     "top_projects_empty": "近 30 天内无项目活动",
-    "top_projects_failed": "无法加载项目列表"
+    "top_projects_failed": "无法加载项目列表",
+    "cost_trend_aria": "7 天费用趋势",
+    "cost_tooltip_split": "Claude {{claude}} · Codex {{codex}}",
+    "cost_tooltip_others": "其他 {{value}}",
+    "cost_tooltip_total": "合计 {{value}}"
   },
   "providers": {
     "claude_label": "Claude",
@@ -165,7 +169,9 @@
     "timeline_last_refresh": "刷新于 {{time}}",
     "timeline_other_lane": "其他",
     "timeline_x_now": "现在",
-    "timeline_x_now_minus": "−{{hours}}小时"
+    "timeline_x_now_minus": "−{{hours}}小时",
+    "timeline_tooltip_cost": "费用 {{value}}",
+    "timeline_tooltip_requests_other": "{{count}} 次请求"
   },
   "machine": {
     "title": "机器健康",
@@ -201,7 +207,9 @@
     "fleet_online": "在线",
     "fleet_offline": "离线",
     "fleet_unnamed": "未命名设备",
-    "fleet_this": "本机"
+    "fleet_this": "本机",
+    "fleet_cpu": "CPU {{value}}%",
+    "fleet_mem": "内存 {{value}}%"
   },
   "swarm": {
     "title": "智能体集群",
@@ -237,7 +245,11 @@
     "action_snooze": "暂停",
     "resolved_label": "已解决",
     "severity_critical": "{{count}} 严重",
-    "severity_warning": "{{count}} 警告"
+    "severity_warning": "{{count}} 警告",
+    "severity_aria_all_clear": "一切正常",
+    "severity_aria_critical": "严重",
+    "severity_aria_warning": "警告",
+    "severity_aria_info": "信息"
   },
   "settings": {
     "account_heading": "账户",
@@ -572,5 +584,11 @@
     "exited_unknown": "[进程已退出]",
     "launched_count": "本次会话已启动 {{n}} 次",
     "provider_missing": "未找到 {{provider}} CLI —— 请安装后再使用此终端。"
+  },
+  "error_boundary": {
+    "title": "CLI Pulse — 界面渲染出错",
+    "body": "界面遇到了无法恢复的错误。把下方文字粘贴到 GitHub issue 中反馈给开发者，有助于修复问题。",
+    "component_stack": "组件堆栈",
+    "recover": "尝试恢复"
   }
 }
