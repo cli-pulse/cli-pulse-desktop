@@ -683,5 +683,27 @@
   "collector_status": {
     "connected": "Connected",
     "unknown": "Unknown"
+  },
+  "errors": {
+    "sign_in_required": "Sign in to see this.",
+    "session_expired": "Your sign-in expired. Sign in again.",
+    "rate_limited": "Too many tries. Wait a minute, then try again.",
+    "invalid_code": "That code is invalid or has expired.",
+    "network": "Network error: {{detail}}",
+    "email_empty": "Enter your email address.",
+    "email_or_code_empty": "Enter your email address and the code.",
+    "pairing_code_empty": "Enter the pairing code.",
+    "prompt_empty": "Type a prompt to send.",
+    "not_paired_budgets": "Pair this device before setting budgets.",
+    "not_paired": "This device is not paired yet.",
+    "keychain_unavailable": "The OS keychain is not available. On Linux, install libsecret (for example gnome-keyring or kwalletd); on a headless server, use the Mac pairing flow instead.",
+    "keychain": "Keychain error: {{detail}}",
+    "server_http": "The server returned an error (HTTP {{status}}): {{detail}}",
+    "auth_http": "Sign-in failed (HTTP {{status}}): {{detail}}",
+    "too_many_terminals": "Too many local terminals are open (maximum {{max}}).",
+    "no_downloads_dir": "No Downloads folder is available.",
+    "invalid_export_filename": "That export file name is not valid.",
+    "wipe_cache_failed": "Could not clear the scan cache: {{detail}}",
+    "no_home_dir": "Could not find your home folder."
   }
 }

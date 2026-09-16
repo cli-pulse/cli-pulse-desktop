@@ -671,5 +671,27 @@
   "collector_status": {
     "connected": "已连接",
     "unknown": "未知"
+  },
+  "errors": {
+    "sign_in_required": "请登录后查看。",
+    "session_expired": "登录已过期，请重新登录。",
+    "rate_limited": "尝试次数过多，请稍等一分钟后重试。",
+    "invalid_code": "验证码无效或已过期。",
+    "network": "网络错误：{{detail}}",
+    "email_empty": "请输入邮箱地址。",
+    "email_or_code_empty": "请输入邮箱地址和验证码。",
+    "pairing_code_empty": "请输入配对码。",
+    "prompt_empty": "请输入要发送的提示词。",
+    "not_paired_budgets": "请先配对此设备，再设置预算。",
+    "not_paired": "此设备尚未配对。",
+    "keychain_unavailable": "系统钥匙串不可用。Linux 上请安装 libsecret（例如 gnome-keyring 或 kwalletd）；无图形界面的服务器请改用 Mac 配对流程。",
+    "keychain": "钥匙串错误：{{detail}}",
+    "server_http": "服务器返回错误（HTTP {{status}}）：{{detail}}",
+    "auth_http": "登录失败（HTTP {{status}}）：{{detail}}",
+    "too_many_terminals": "本地终端开得太多了（最多 {{max}} 个）。",
+    "no_downloads_dir": "找不到“下载”文件夹。",
+    "invalid_export_filename": "导出文件名无效。",
+    "wipe_cache_failed": "无法清除扫描缓存：{{detail}}",
+    "no_home_dir": "找不到你的主文件夹。"
   }
 }
