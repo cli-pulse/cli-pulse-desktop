@@ -18,6 +18,11 @@ import { describe, it, expect } from "vitest";
 //   account = 帳戶     (Microsoft). Apple and Android say 帳號.
 //
 // "transcripts" is 對話記錄, not 工作階段記錄: it means the conversation text.
+//
+// "active" is deliberately two words. An active alert is 作用中的警示 (Microsoft's term for
+// something in effect; 活躍警示 reads unnaturally). An active session keeps 活躍 (活躍工作階段),
+// matching the Apple zh-Hant catalogue. To use one word for "active" later, change it here
+// and in the Apple zh-Hant catalogue together.
 
 const LOCALE_FILES = import.meta.glob<Record<string, unknown>>("./locales/zh-TW.json", {
   eager: true,
@@ -27,6 +32,8 @@ const LOCALE_FILES = import.meta.glob<Record<string, unknown>>("./locales/zh-TW.
 const FORBIDDEN: Record<string, string> = {
   告警: "alert is 警示 in zh-TW",
   會話: "session is 工作階段 in zh-TW",
+  // Simplified form: catches a zh-CN string pasted into zh-TW (告警 is the same in both scripts).
+  会话: "session is 工作階段 in zh-TW (Simplified-Chinese copy leaked in)",
 };
 
 function flatten(obj: Record<string, unknown>, prefix = ""): Record<string, string> {
