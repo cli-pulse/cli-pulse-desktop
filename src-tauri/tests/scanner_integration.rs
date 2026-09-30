@@ -1047,25 +1047,17 @@ fn claude_half_written_last_line_is_counted_once_it_is_complete() {
 
 /// The macOS app's Codex accounting cases, copied unchanged from
 /// `CLI Pulse Bar/CLIPulseCore/Tests/Fixtures/codex-accounting-cases.json` in
-/// cli-pulse/cli-pulse-private (commit 89156f66). Both apps must report the
+/// cli-pulse/cli-pulse-private (commit 4c3dc377). Both apps must report the
 /// same tokens per day and model for them, so the two cannot drift apart
 /// unnoticed. When the Mac's copy changes, copy it again.
 const MAC_CODEX_CASES: &str = include_str!("fixtures/codex-accounting-cases.json");
 
-/// Cases the desktop deliberately counts differently from the Mac, with what
-/// the desktop reports instead. Each is asserted both ways: the desktop's own
-/// number, and that it still differs from the Mac's, so a change on either
-/// side has to update this list.
-///
-/// - `copied_history_before_meta`: a sub-agent file that starts with a copy of
-///   its parent's history. The Mac leaves out events stamped before the
-///   sub-agent's own `session_meta`; the desktop has no sub-agent rules and
-///   counts the copied history instead of the sub-agent's own two requests,
-///   which fall below the copied counter.
-const DESKTOP_DIFFERS_FROM_MAC: &[(&str, &str)] = &[(
-    "copied_history_before_meta",
-    r#"{"2026-09-20": {"gpt-5.5": [6000, 4600, 300]}}"#,
-)];
+/// Cases the desktop deliberately counts differently from the Mac, as
+/// `(case, what the desktop reports)`. Each is asserted both ways: the
+/// desktop's own number, and that it still differs from the Mac's, so a
+/// change on either side has to update this list. Empty: the two agree on
+/// every case.
+const DESKTOP_DIFFERS_FROM_MAC: &[(&str, &str)] = &[];
 
 type DayModelTokens = BTreeMap<String, BTreeMap<String, [i64; 3]>>;
 
@@ -1127,7 +1119,7 @@ fn codex_accounting_matches_the_mac_on_the_shared_cases() {
         .date_naive();
     let days = fixture["days_to_scan"].as_u64().unwrap() as u32;
     let cases = fixture["cases"].as_array().unwrap();
-    assert!(cases.len() >= 11, "fixture lost cases");
+    assert!(cases.len() >= 14, "fixture lost cases");
     for (name, _) in DESKTOP_DIFFERS_FROM_MAC {
         assert!(
             cases.iter().any(|c| c["name"] == *name),

@@ -30,7 +30,9 @@ use chrono::{DateTime, Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::cache::{self, CodexTotals, CostUsageCache, FileAction, FileEntry, Packed};
+use crate::cache::{
+    self, CodexChildMeta, CodexTotals, CostUsageCache, FileAction, FileEntry, Packed,
+};
 use crate::paths;
 use crate::pricing;
 use crate::wsl::{classify_origin, Origin};
@@ -445,13 +447,18 @@ fn rebuild_days_from_files(cache: &mut CostUsageCache, skip: &HashSet<String>) {
 /// counted twice, because files are otherwise told apart only by path.
 ///
 /// Two files are copies of one rollout when they carry the same rollout id
-/// (`session_meta.payload.id`) AND their token events overlap in time. The id
-/// alone is not enough: an editor can start a rollout in one file and continue
-/// it in another under the same id, with no event in common, and both halves
-/// are real usage. Files with no token events are never copies of anything.
+/// (`session_meta.payload.id`) AND one file's token events lie within the time
+/// span of the other's: a copy is the whole file or an earlier state of it.
+/// The id alone is not enough: an editor can start a rollout in one file and
+/// continue it in another under the same id, and both are real usage. Nor is
+/// an overlap in time: two files of one rollout whose spans overlap without
+/// one containing the other each hold events the other lacks. Files with no
+/// token events are never copies of anything.
 ///
-/// Among overlapping copies the most complete one is kept: most token events,
-/// then the larger final totals, then the first path in sort order.
+/// Files are taken most complete first (most token events, then the larger
+/// final input + output, then the first path in sort order), and a file whose
+/// span lies within one already taken is a copy. Same rule as the macOS app's
+/// `CodexCopyResolver`.
 ///
 /// Sub-agent rollouts are not affected: each has its own rollout id (their
 /// `session_id` is the parent's, which is why this does not use it).
@@ -467,9 +474,12 @@ pub(crate) fn codex_duplicate_copies(cache: &CostUsageCache) -> HashSet<String> 
         }
     }
 
-    fn completeness(e: &FileEntry) -> (i64, i64, i64) {
+    fn completeness(e: &FileEntry) -> (i64, i64) {
         let totals = e.last_totals.unwrap_or_default();
-        (e.event_count.unwrap_or(0), totals.input, totals.output)
+        (
+            e.event_count.unwrap_or(0),
+            totals.input.saturating_add(totals.output),
+        )
     }
 
     let mut copies = HashSet::new();
@@ -487,7 +497,7 @@ pub(crate) fn codex_duplicate_copies(cache: &CostUsageCache) -> HashSet<String> 
             let (Some(start), Some(end)) = (entry.first_event_ms, entry.last_event_ms) else {
                 continue;
             };
-            if kept.iter().any(|&(s, e)| start <= e && s <= end) {
+            if kept.iter().any(|&(s, e)| s <= start && end <= e) {
                 copies.insert(path.clone());
             } else {
                 kept.push((start, end));
@@ -529,11 +539,13 @@ fn codex_date_from_path(path: &Path, root: &Path) -> Option<String> {
 ///    began: by the rollout a fork continues, or by an earlier file of the
 ///    same rollout that this one picks up. It becomes the baseline. A fresh
 ///    counter's first total equals its first request, so this changes nothing
-///    for it. Without `last_token_usage` the first total counts in full.
+///    for it. Without `last_token_usage` the first total counts in full,
+///    unless the file names a parent: then all of it is taken as carried.
 ///
-/// These are the Mac's rules 1 and 3. Its rule 2, which leaves out the events
-/// a sub-agent file copies from its parent before its own `session_meta`, is
-/// not ported: the desktop has no sub-agent rules (see the shared-cases test).
+/// These are the Mac's rules 1 and 3. Its rule 2, a sub-agent's or fork's
+/// copy of its parent's history, is applied before an event reaches the
+/// counter (`parse_codex_file`): a copied event is neither counted nor moves
+/// the baseline.
 ///
 /// Rule 1 follows the monotonic watermark of CodexBar's `CodexTotalsTracker`
 /// (MIT; see the notice in pricing.rs). Not verbatim: upstream latches an
@@ -553,6 +565,9 @@ fn codex_date_from_path(path: &Path, root: &Path) -> Option<String> {
 pub(crate) struct CodexCounter {
     /// The totals counted so far; `None` before the file's first event.
     pub baseline: Option<CodexTotals>,
+    /// The rollout names a parent (a sub-agent or a fork). Not saved: it is
+    /// restored from the file's `CodexChildMeta`.
+    pub child: bool,
 }
 
 impl CodexCounter {
@@ -562,11 +577,17 @@ impl CodexCounter {
         let total = clamp_totals(total);
         // Rule 2: the file's first event, continuing a counter from elsewhere.
         if self.baseline.is_none() {
-            if let Some(last) = last {
-                let carried = saturating_sub(total, clamp_totals(last));
-                if !is_zero(&carried) {
-                    self.baseline = Some(carried);
-                }
+            let carried = match last {
+                Some(last) => saturating_sub(total, clamp_totals(last)),
+                // Without `last` nothing shows how much of a child's first
+                // total is its own, so all of it is taken as the parent's: at
+                // worst one request is missed, never a parent's history
+                // counted. A file that names no parent counts it.
+                None if self.child => total,
+                None => CodexTotals::default(),
+            };
+            if !is_zero(&carried) {
+                self.baseline = Some(carried);
             }
         }
         // Rule 1: the baseline only rises.
@@ -594,9 +615,9 @@ impl CodexCounter {
         let delta = clamp_totals(last);
         let base = self.baseline.unwrap_or_default();
         self.baseline = Some(CodexTotals {
-            input: base.input + delta.input,
-            cached: base.cached + delta.cached,
-            output: base.output + delta.output,
+            input: base.input.saturating_add(delta.input),
+            cached: base.cached.saturating_add(delta.cached),
+            output: base.output.saturating_add(delta.output),
         });
         delta
     }
@@ -646,8 +667,13 @@ struct CodexResume {
     model: Option<String>,
     counter: CodexCounter,
     span: EventSpan,
+    /// The file's own `session_meta` has been read. Later ones are ancestors'
+    /// metadata copied in with their history and are ignored.
+    saw_meta: bool,
     session_id: Option<String>,
     rollout_id: Option<String>,
+    /// Set when the rollout names a parent.
+    child: Option<CodexChildMeta>,
 }
 
 impl CodexResume {
@@ -656,15 +682,75 @@ impl CodexResume {
             model: e.last_model.clone(),
             counter: CodexCounter {
                 baseline: e.last_totals,
+                child: e.codex_child.is_some(),
             },
             span: EventSpan {
                 first_ms: e.first_event_ms,
                 last_ms: e.last_event_ms,
                 count: e.event_count.unwrap_or(0),
             },
+            saw_meta: e.session_id.is_some() || e.rollout_id.is_some() || e.codex_child.is_some(),
             session_id: e.session_id.clone(),
             rollout_id: e.rollout_id.clone(),
+            child: e.codex_child,
         }
+    }
+
+    /// A `session_meta` line. Only the file's first one is its own.
+    fn observe_session_meta(&mut self, line: &serde_json::Value) {
+        if self.saw_meta {
+            return;
+        }
+        self.saw_meta = true;
+        let Some(payload) = line.get("payload") else {
+            return;
+        };
+        let text = |key: &str| payload.get(key).and_then(|v| v.as_str());
+        self.session_id = text("session_id")
+            .or_else(|| text("sessionId"))
+            .or_else(|| text("id"))
+            .map(String::from);
+        self.rollout_id = text("id").map(String::from);
+        let names_parent = text("parent_thread_id").is_some_and(|s| !s.is_empty())
+            || text("forked_from_id").is_some_and(|s| !s.is_empty())
+            || payload
+                .get("source")
+                .and_then(|s| s.get("subagent"))
+                .is_some();
+        if names_parent {
+            let meta_ts =
+                text("timestamp").or_else(|| line.get("timestamp").and_then(|v| v.as_str()));
+            self.child = Some(CodexChildMeta {
+                meta_ms: meta_ts.and_then(parse_unix_ms),
+                history_start_ordinal: payload
+                    .get("subagent_history_start_ordinal")
+                    .and_then(|v| v.as_i64()),
+            });
+            self.counter.child = true;
+        }
+    }
+
+    /// Whether a token event is part of the parent's history that a
+    /// sub-agent or fork file begins with (the Mac's rule 2). Codex stamps the
+    /// copied lines when it writes them, after the file's own `session_meta`,
+    /// so their times say nothing; what marks them is the line number: the
+    /// `session_meta` names the first line of the file's own history
+    /// (`subagent_history_start_ordinal`) and every line carries its
+    /// `ordinal`. An event stamped before the file's own `session_meta` is
+    /// not its own either (logs without the ordinal).
+    fn is_copied_history(&self, ordinal: Option<i64>, at_ms: Option<i64>) -> bool {
+        let Some(child) = self.child else {
+            return false;
+        };
+        let before_start = matches!(
+            (child.history_start_ordinal, ordinal),
+            (Some(start), Some(line)) if line < start
+        );
+        let before_meta = matches!(
+            (child.meta_ms, at_ms),
+            (Some(meta), Some(at)) if at < meta
+        );
+        before_start || before_meta
     }
 }
 
@@ -692,6 +778,7 @@ impl CodexParseResult {
             last_totals: s.counter.baseline,
             session_id: s.session_id,
             rollout_id: s.rollout_id,
+            codex_child: s.child,
             first_event_ms: s.span.first_ms,
             last_event_ms: s.span.last_ms,
             event_count: Some(s.span.count),
@@ -797,19 +884,7 @@ fn parse_codex_file(
         let ty = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
         if ty == "session_meta" {
-            if let Some(payload) = obj.get("payload") {
-                if state.session_id.is_none() {
-                    state.session_id = payload
-                        .get("session_id")
-                        .and_then(|v| v.as_str())
-                        .or_else(|| payload.get("sessionId").and_then(|v| v.as_str()))
-                        .or_else(|| payload.get("id").and_then(|v| v.as_str()))
-                        .map(String::from);
-                }
-                if state.rollout_id.is_none() {
-                    state.rollout_id = payload.get("id").and_then(|v| v.as_str()).map(String::from);
-                }
-            }
+            state.observe_session_meta(&obj);
             continue;
         }
 
@@ -848,21 +923,29 @@ fn parse_codex_file(
         let info = payload.get("info");
         let total = info.and_then(|i| i.get("total_token_usage"));
         let last = info.and_then(|i| i.get("last_token_usage"));
+        if total.is_none() && last.is_none() {
+            continue;
+        }
+        let at_ms = parse_unix_ms(ts);
+        // A sub-agent's or fork's copy of its parent's history: the parent's
+        // usage, counted in the parent's own file. Not counted, and it does
+        // not move the counter or the file's event span.
+        let ordinal = obj.get("ordinal").and_then(|v| v.as_i64());
+        if state.is_copied_history(ordinal, at_ms) {
+            continue;
+        }
         // The counter advances on EVERY event, in the scan window or not. If
         // it only advanced on in-window events, the first in-window event of a
         // rollout that began before the window would be measured from zero,
         // and everything the rollout used before the window would land on the
         // window's first day.
-        let delta = if let Some(total) = total {
-            state
+        let delta = match (total, last) {
+            (Some(total), last) => state
                 .counter
-                .observe_total(codex_totals(total), last.map(codex_totals))
-        } else if let Some(last) = last {
-            state.counter.observe_last(codex_totals(last))
-        } else {
-            continue;
+                .observe_total(codex_totals(total), last.map(codex_totals)),
+            (None, Some(last)) => state.counter.observe_last(codex_totals(last)),
+            (None, None) => continue,
         };
-        let at_ms = parse_unix_ms(ts);
         state.span.observe(at_ms);
 
         if !in_range(&day, range) || is_zero(&delta) {
@@ -894,10 +977,11 @@ fn parse_codex_file(
         while packed.len() < 4 {
             packed.push(0);
         }
-        packed[0] += delta.input;
-        packed[1] += cached;
-        packed[2] += delta.output;
-        packed[3] += cost_nanos;
+        // Saturating, so an absurd count in a corrupt log cannot overflow.
+        packed[0] = packed[0].saturating_add(delta.input);
+        packed[1] = packed[1].saturating_add(cached);
+        packed[2] = packed[2].saturating_add(delta.output);
+        packed[3] = packed[3].saturating_add(cost_nanos);
     }
 
     out.parsed_bytes = start_offset + bytes_seen;
@@ -1498,6 +1582,102 @@ mod tests {
     }
 
     #[test]
+    fn counter_child_first_total_without_last_is_taken_as_carried() {
+        // A sub-agent or fork whose first event has no `last_token_usage`:
+        // nothing shows which part of the total is its own, so none of it is
+        // counted, and the next event counts from there.
+        let mut child = CodexCounter {
+            child: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            child.observe_total(tot(5000, 4000, 300), None),
+            tot(0, 0, 0)
+        );
+        assert_eq!(
+            child.observe_total(tot(5600, 4400, 330), None),
+            tot(600, 400, 30)
+        );
+        // With `last`, a child is treated like any file.
+        let mut with_last = CodexCounter {
+            child: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            with_last.observe_total(tot(5700, 4500, 340), Some(tot(700, 500, 40))),
+            tot(700, 500, 40)
+        );
+    }
+
+    #[test]
+    fn copied_history_is_told_by_line_number_or_by_time() {
+        let meta = |ordinal: Option<i64>| CodexResume {
+            child: Some(CodexChildMeta {
+                meta_ms: Some(10_000),
+                history_start_ordinal: ordinal,
+            }),
+            ..Default::default()
+        };
+        // The line number decides when the file names its own start; copied
+        // lines are stamped after the file's own session_meta, so their time
+        // says nothing.
+        let marked = meta(Some(5));
+        assert!(marked.is_copied_history(Some(3), Some(20_000)));
+        assert!(marked.is_copied_history(Some(4), None));
+        assert!(!marked.is_copied_history(Some(5), Some(20_000)));
+        assert!(!marked.is_copied_history(None, Some(20_000)));
+        // Without the ordinal, an event stamped before the session_meta is
+        // copied.
+        let unmarked = meta(None);
+        assert!(unmarked.is_copied_history(Some(3), Some(9_999)));
+        assert!(!unmarked.is_copied_history(Some(3), Some(10_000)));
+        assert!(!unmarked.is_copied_history(Some(3), None));
+        // A file that names no parent has no copied history.
+        let root = CodexResume::default();
+        assert!(!root.is_copied_history(Some(0), Some(0)));
+    }
+
+    #[test]
+    fn only_the_first_session_meta_is_the_files_own() {
+        let line = |json: &str| serde_json::from_str::<serde_json::Value>(json).unwrap();
+        let mut state = CodexResume::default();
+        state.observe_session_meta(&line(
+            r#"{"type":"session_meta","timestamp":"2026-09-29T11:10:00Z","payload":{"id":"child","session_id":"parent","timestamp":"2026-09-29T11:10:00Z","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}},"subagent_history_start_ordinal":5}}"#,
+        ));
+        // The parent's session_meta, copied in with its history.
+        state.observe_session_meta(&line(
+            r#"{"type":"session_meta","timestamp":"2026-09-29T11:00:00Z","payload":{"id":"parent","source":"cli"}}"#,
+        ));
+        assert_eq!(state.rollout_id.as_deref(), Some("child"));
+        assert_eq!(state.session_id.as_deref(), Some("parent"));
+        assert!(state.counter.child);
+        assert_eq!(
+            state.child,
+            Some(CodexChildMeta {
+                meta_ms: parse_unix_ms("2026-09-29T11:10:00Z"),
+                history_start_ordinal: Some(5),
+            })
+        );
+        // A file that names no parent.
+        let mut root = CodexResume::default();
+        root.observe_session_meta(&line(
+            r#"{"type":"session_meta","timestamp":"2026-09-29T11:00:00Z","payload":{"id":"r","source":"cli","parent_thread_id":""}}"#,
+        ));
+        assert_eq!(root.child, None);
+        assert!(!root.counter.child);
+        // Resuming keeps all of it.
+        let entry = CodexParseResult {
+            parsed_bytes: 0,
+            file_days: HashMap::new(),
+            state,
+        }
+        .into_entry(0, 0, HashMap::new());
+        let resumed = CodexResume::from_entry(&entry);
+        assert!(resumed.saw_meta && resumed.counter.child);
+        assert_eq!(resumed.child.and_then(|c| c.history_start_ordinal), Some(5));
+    }
+
+    #[test]
     fn counter_last_only_event_is_not_counted_again_by_a_later_total() {
         let mut c = CodexCounter::default();
         assert_eq!(c.observe_total(tot(100, 0, 10), None), tot(100, 0, 10));
@@ -1520,6 +1700,7 @@ mod tests {
             .sum();
         let mut resumed = CodexCounter {
             baseline: c.baseline,
+            child: false,
         };
         let rest: i64 = snapshots[2..]
             .iter()
@@ -1598,6 +1779,23 @@ mod tests {
             (
                 "/b/rollout-r1b.jsonl",
                 rollout("r1", 3_001, 9_000, 9, 5_000),
+            ),
+        ]);
+        assert!(codex_duplicate_copies(&cache).is_empty());
+    }
+
+    #[test]
+    fn a_partial_overlap_is_not_a_copy() {
+        // Same id, spans overlapping without one containing the other: each
+        // file has events the other lacks, so both count.
+        let cache = cache_of(&[
+            (
+                "/a/rollout-r1.jsonl",
+                rollout("r1", 1_000, 20_000, 3, 3_000),
+            ),
+            (
+                "/b/rollout-r1b.jsonl",
+                rollout("r1", 15_000, 40_000, 2, 1_000),
             ),
         ]);
         assert!(codex_duplicate_copies(&cache).is_empty());

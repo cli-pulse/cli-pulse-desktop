@@ -18,14 +18,16 @@ All notable changes to CLI Pulse Desktop (Windows + Linux).
   the change (Sol before 2026-08-21, Terra and Luna before 2026-07-30). Both need the request, not the day,
   so Codex cost is now summed per request while parsing, as Claude's already was.
 - **A Codex rollout that exists in two places is counted once.** The scan reads both `sessions/` and
-  `archived_sessions/` (and each WSL distro's), and told files apart only by path. A copy with the same
-  rollout id whose events overlap in time is now left out; a rollout continued in a second file still counts
-  in full, and sub-agent rollouts are unaffected.
+  `archived_sessions/` (and each WSL distro's), and told files apart only by path. A file with the same
+  rollout id whose events lie within another's time span (the whole file, or an earlier state of it) is now
+  left out; a rollout continued in a second file still counts in full.
 - **Codex tokens are counted the way the macOS app counts them.** When a rollout's cumulative token counter
   jumped back up after a drop, the gap between the two values was counted again; the baseline now only rises,
   and a snapshot below it is skipped. A rollout file whose counter carries on from an earlier file or from the
   rollout it forks counted the carried total a second time; its first event now counts only its own request.
-  Both apps run the same shared test cases. The counter also advances on events outside the scan window, so a
+  A sub-agent's rollout can begin with a copy of its parent's history, token counts included; those lines
+  (numbered before the sub-agent's own history starts) are no longer counted a second time. Both apps run the
+  same shared test cases. The counter also advances on events outside the scan window, so a
   rollout that began before the window no longer puts its earlier usage on the window's first day.
 - **A log line caught half-written is read once it is complete.** A scan that ran while Codex or Claude Code
   was writing a line skipped past it, and the rest of the line never parsed, so that request was lost.

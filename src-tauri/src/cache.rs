@@ -50,9 +50,10 @@ const CACHE_SCHEMA_VERSION: u32 = 1;
 /// - 1: per-request cost with dated and long-context rates (packed slot 3);
 ///   the cumulative baseline only rises (a snapshot below it is skipped) and
 ///   a counter carried over from before the file's first event is not
-///   counted again (`scanner::CodexCounter`); state advances on out-of-range
-///   events too; the rollout id and event span are recorded so a second copy
-///   of a rollout is counted once.
+///   counted again (`scanner::CodexCounter`); a sub-agent's or fork's copy of
+///   its parent's history is left out; state advances on out-of-range events
+///   too; the rollout id and event span are recorded so a second copy of a
+///   rollout is counted once.
 ///
 /// Price-table changes do not need a bump: they change
 /// `pricing_fingerprint(provider)`, which is checked as well.
@@ -81,6 +82,20 @@ pub struct CodexTotals {
     pub input: i64,
     pub cached: i64,
     pub output: i64,
+}
+
+/// Codex: what a rollout's own `session_meta` says when it names a parent (a
+/// sub-agent or a fork), which is when the file can begin with the parent's
+/// history copied in. See `scanner::parse_codex_file`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexChildMeta {
+    /// Time of the file's own `session_meta`, Unix ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta_ms: Option<i64>,
+    /// `subagent_history_start_ordinal`: the line number (`ordinal`) where the
+    /// file's own history starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_start_ordinal: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -117,6 +132,10 @@ pub struct FileEntry {
     /// Codex: number of token events in the whole file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_count: Option<i64>,
+    /// Codex: set when the rollout names a parent. Kept so that a file parsed
+    /// incrementally still leaves out the parent's copied history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_child: Option<CodexChildMeta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
