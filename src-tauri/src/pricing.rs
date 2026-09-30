@@ -626,10 +626,11 @@ mod tests {
 
     #[test]
     fn gpt_5_5_uses_published_rates_not_the_gpt_5_4_placeholder() {
-        // 1M input @ $5/M + 100K output @ $30/M = $5 + $3 = $8.
+        // 100K input @ $5/M + 10K output @ $30/M = $0.50 + $0.30 = $0.80
+        // (the placeholder gave $0.25 + $0.15).
         close(
-            codex_cost_usd("gpt-5.5", 1_000_000, 0, 100_000, None).unwrap(),
-            8.0,
+            codex_cost_usd("gpt-5.5", 100_000, 0, 10_000, None).unwrap(),
+            0.80,
         );
         // 200K input, 150K of it cached: 50K @ $5/M + 150K @ $0.50/M = $0.325.
         close(
@@ -698,54 +699,44 @@ mod tests {
 
     #[test]
     fn sol_is_billed_at_the_rate_of_the_request_day() {
-        // Before 2026-08-21: $5 / $30. From 2026-08-21: $4 / $20.
-        let before = codex_cost_usd("gpt-5.6-sol", 1_000_000, 0, 0, Some(AUG_20_NOON_MS));
-        let after = codex_cost_usd("gpt-5.6-sol", 1_000_000, 0, 0, Some(AUG_22_NOON_MS));
-        close(before.unwrap(), 5.0);
-        close(after.unwrap(), 4.0);
+        // 100K input (under the 272K line). Before 2026-08-21: $5/M = $0.50.
+        // From 2026-08-21: $4/M = $0.40.
+        let before = codex_cost_usd("gpt-5.6-sol", 100_000, 0, 0, Some(AUG_20_NOON_MS));
+        let after = codex_cost_usd("gpt-5.6-sol", 100_000, 0, 0, Some(AUG_22_NOON_MS));
+        close(before.unwrap(), 0.50);
+        close(after.unwrap(), 0.40);
         // No time = today's rate.
         close(
-            codex_cost_usd("gpt-5.6-sol", 1_000_000, 0, 0, None).unwrap(),
-            4.0,
+            codex_cost_usd("gpt-5.6-sol", 100_000, 0, 0, None).unwrap(),
+            0.40,
         );
-        // The earlier rates keep their own long-context tier ($10/M).
+        // The earlier rates keep their own long-context tier: 300K @ $10/M.
         close(
             codex_cost_usd("gpt-5.6-sol", 300_000, 0, 0, Some(AUG_20_NOON_MS)).unwrap(),
             3.0,
+        );
+        // Today's long-context rate for comparison: 300K @ $8/M.
+        close(
+            codex_cost_usd("gpt-5.6-sol", 300_000, 0, 0, Some(AUG_22_NOON_MS)).unwrap(),
+            2.4,
         );
     }
 
     #[test]
     fn repricing_boundaries_are_exact() {
         // The last millisecond before the change is billed at the old rate,
-        // the first millisecond of the change day at the new one.
+        // the first millisecond of the change day at the new one. 100K input
+        // each, under the long-context line.
+        let cost = |model: &str, at: i64| codex_cost_usd(model, 100_000, 0, 0, Some(at)).unwrap();
         let sol = CODEX_SOL_REPRICED_UNIX_MS;
-        close(
-            codex_cost_usd("gpt-5.6-sol", 1_000_000, 0, 0, Some(sol - 1)).unwrap(),
-            5.0,
-        );
-        close(
-            codex_cost_usd("gpt-5.6-sol", 1_000_000, 0, 0, Some(sol)).unwrap(),
-            4.0,
-        );
+        close(cost("gpt-5.6-sol", sol - 1), 0.50);
+        close(cost("gpt-5.6-sol", sol), 0.40);
         let tl = CODEX_TERRA_LUNA_REPRICED_UNIX_MS;
-        close(
-            codex_cost_usd("gpt-5.6-terra", 1_000_000, 0, 0, Some(tl - 1)).unwrap(),
-            2.5,
-        );
-        close(
-            codex_cost_usd("gpt-5.6-terra", 1_000_000, 0, 0, Some(tl)).unwrap(),
-            2.0,
-        );
+        close(cost("gpt-5.6-terra", tl - 1), 0.25);
+        close(cost("gpt-5.6-terra", tl), 0.20);
         // Luna was five times today's price before the change.
-        close(
-            codex_cost_usd("gpt-5.6-luna", 1_000_000, 0, 0, Some(tl - 1)).unwrap(),
-            1.0,
-        );
-        close(
-            codex_cost_usd("gpt-5.6-luna", 1_000_000, 0, 0, Some(tl)).unwrap(),
-            0.2,
-        );
+        close(cost("gpt-5.6-luna", tl - 1), 0.10);
+        close(cost("gpt-5.6-luna", tl), 0.02);
         // The dates are the ones the constants claim.
         let as_utc = |ms: i64| {
             chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms)
