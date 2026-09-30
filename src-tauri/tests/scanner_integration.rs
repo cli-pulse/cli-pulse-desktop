@@ -18,10 +18,13 @@
 //!   v0.2.2 timezone bug)
 //! - Codex cost priced per request (272K long-context tier, dated rates)
 //! - Codex cumulative-counter drops and copies of one rollout in two places
+//! - The Codex accounting cases shared with the macOS app
+//!   (`fixtures/codex-accounting-cases.json`)
+//! - A line still being written is read once it is complete
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
 use cli_pulse_desktop_lib::scanner::{self, DailyEntry, ScanOptions, CLAUDE_MSG_BUCKET_MODEL};
@@ -578,7 +581,7 @@ fn codex_long_context_request_bills_the_whole_request_higher() {
 fn codex_rates_follow_the_request_time() {
     // gpt-5.6-sol was repriced from $5/M to $4/M input on 2026-08-21. One
     // 100K request the day before and one the day after: $0.50 + $0.40.
-    // The model is logged as the alias `gpt-5.6`, which is Sol.
+    // The model is logged as the alias `gpt-5.6`, which is billed as Sol.
     let env = TempEnv::new("codex_dated");
     env.write_at(
         &env.codex_root,
@@ -590,12 +593,15 @@ fn codex_rates_follow_the_request_time() {
     );
     let today = NaiveDate::from_ymd_opt(2026, 8, 22).unwrap();
     let result = scanner::scan_with_options(env.options(7, Some(today))).unwrap();
-    let (input, _, _, cost) = codex_sum(&result.entries, "gpt-5.6-sol");
+    let (input, _, _, cost) = codex_sum(&result.entries, "gpt-5.6");
     assert_eq!(input, 200_000);
     assert_usd(cost, 0.90);
+    // Stored and uploaded under the name Codex logged, as on the Mac: a
+    // renamed row would sit beside the rows already uploaded under the old
+    // name, and the day would count twice.
     assert!(
-        result.entries.iter().all(|e| e.model != "gpt-5.6"),
-        "the alias should be reported under the model it resolves to"
+        result.entries.iter().all(|e| e.model != "gpt-5.6-sol"),
+        "the alias was renamed to the model it is billed as"
     );
 }
 
@@ -664,8 +670,10 @@ fn codex_counter_jumping_between_two_series_is_not_recounted() {
 }
 
 #[test]
-fn codex_counter_restart_keeps_counting() {
-    // The counter reaches 2000, restarts and climbs to 900: 2000 + 300 + 500.
+fn codex_counter_restart_counts_only_above_the_old_high() {
+    // The counter reaches 2000, restarts and climbs to 900. The baseline only
+    // rises, so nothing after the restart passes 2000 and only 2000 counts:
+    // the undercount the macOS app and CodexBar accept too.
     let env = TempEnv::new("codex_restart");
     let snaps = [1000, 2000, 100, 400, 900];
     let body: Vec<String> = snaps
@@ -676,7 +684,7 @@ fn codex_counter_restart_keeps_counting() {
     env.write_codex("2026", "09", "10", "r.jsonl", &lines(&body));
     let today = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
     let result = scanner::scan_with_options(env.options(1, Some(today))).unwrap();
-    assert_eq!(codex_sum(&result.entries, "gpt-5.5").0, 2800);
+    assert_eq!(codex_sum(&result.entries, "gpt-5.5").0, 2000);
 }
 
 #[test]
@@ -852,8 +860,9 @@ fn codex_warm_scan_reuses_the_cache() {
 #[test]
 fn codex_incremental_scan_matches_a_full_rescan_across_a_counter_drop() {
     // First scan sees the high series and a drop; the appended snapshot
-    // returns to the high series. Resuming must remember the peak, or the
-    // jump back up re-counts the gap (1100 - 100 = 1000 instead of 100).
+    // returns to the high series. Resuming must start from the saved
+    // baseline (1000), not the last snapshot seen (100), or the jump back up
+    // re-counts the gap (1100 - 100 = 1000 instead of 100).
     let env = TempEnv::new("codex_incremental_drop");
     let today = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
     let head = vec![
@@ -878,5 +887,306 @@ fn codex_incremental_scan_matches_a_full_rescan_across_a_counter_drop() {
     assert_eq!(
         codex_sum(&incremental.entries, "gpt-5.5"),
         codex_sum(&full.entries, "gpt-5.5")
+    );
+}
+
+#[test]
+fn codex_copy_is_still_recognised_after_the_live_file_grows() {
+    // The case the copy check exists for: a rollout still being written in
+    // `sessions/` while a copy taken earlier sits in `archived_sessions/`.
+    // The live file is parsed incrementally from then on, so the rollout id
+    // and event span it was matched on must survive the resume.
+    let env = TempEnv::new("codex_copy_incremental");
+    let archived = env.root.join("archived_sessions");
+    let early = one_rollout("rollout-a", None, 0, &[1_000, 3_000]);
+    env.write_codex("2026", "09", "10", ROLLOUT_NAME, &early);
+    env.write_at(&archived, ROLLOUT_NAME, &early);
+
+    let today = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+    let mut warm = env.options(1, Some(today));
+    warm.force_rescan = false;
+    warm.codex_roots_override = Some(vec![env.codex_root.clone(), archived]);
+    let first = scanner::scan_with_options(warm.clone()).unwrap();
+    assert_eq!(codex_sum(&first.entries, "gpt-5.5").0, 3_000);
+
+    // The live file goes on; the archived copy does not.
+    env.write_codex(
+        "2026",
+        "09",
+        "10",
+        ROLLOUT_NAME,
+        &one_rollout("rollout-a", None, 0, &[1_000, 3_000, 6_000]),
+    );
+    let grown = scanner::scan_with_options(warm.clone()).unwrap();
+    assert_eq!(
+        (grown.files_scanned, grown.files_cached),
+        (1, 1),
+        "the live file should be parsed incrementally, the copy reused"
+    );
+    let mut full = warm;
+    full.force_rescan = true;
+    let rescanned = scanner::scan_with_options(full).unwrap();
+
+    assert_eq!(codex_sum(&grown.entries, "gpt-5.5").0, 6_000);
+    assert_eq!(
+        codex_sum(&grown.entries, "gpt-5.5"),
+        codex_sum(&rescanned.entries, "gpt-5.5")
+    );
+    // The per-origin split leaves the copy out too: one file, 6000 + 600.
+    let native: Vec<_> = grown
+        .origin_usage
+        .iter()
+        .filter(|o| o.kind == "native")
+        .collect();
+    assert_eq!((native[0].tokens, native[0].files), (6_600, 1));
+}
+
+// ========================================================================
+// A line still being written is read once it is complete
+// ========================================================================
+
+#[test]
+fn codex_half_written_last_line_is_counted_once_it_is_complete() {
+    // A scan that lands while Codex is writing a line sees only part of it.
+    // That part must be left for the next scan, not skipped: skipping it moved
+    // the saved offset into the middle of the line, and the next scan read the
+    // rest as a line of its own, which never parses.
+    let env = TempEnv::new("codex_partial_line");
+    let today = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+    let head = format!(
+        "{}\n",
+        codex_total("2026-09-10T12:00:00Z", "gpt-5.5", 1_000, 0, 100)
+    );
+    let second = codex_total("2026-09-10T12:01:00Z", "gpt-5.5", 2_500, 0, 300);
+    let (written, rest) = second.split_at(second.len() / 2);
+    env.write_codex("2026", "09", "10", "r.jsonl", &format!("{head}{written}"));
+
+    let mut warm = env.options(1, Some(today));
+    warm.force_rescan = false;
+    let first = scanner::scan_with_options(warm.clone()).unwrap();
+    assert_eq!(codex_sum(&first.entries, "gpt-5.5").0, 1_000);
+
+    env.write_codex(
+        "2026",
+        "09",
+        "10",
+        "r.jsonl",
+        &format!("{head}{written}{rest}\n"),
+    );
+    let completed = scanner::scan_with_options(warm).unwrap();
+    assert_eq!(completed.files_scanned, 1);
+    assert_eq!(
+        codex_sum(&completed.entries, "gpt-5.5").0,
+        2_500,
+        "the completed line was lost"
+    );
+    let full = scanner::scan_with_options(env.options(1, Some(today))).unwrap();
+    assert_eq!(
+        codex_sum(&completed.entries, "gpt-5.5"),
+        codex_sum(&full.entries, "gpt-5.5")
+    );
+}
+
+#[test]
+fn codex_complete_last_line_without_a_newline_is_counted() {
+    // A final line that already parses is a finished line written without a
+    // trailing newline, not one still being written.
+    let env = TempEnv::new("codex_no_final_newline");
+    let today = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+    env.write_codex(
+        "2026",
+        "09",
+        "10",
+        "r.jsonl",
+        &format!(
+            "{}\n{}",
+            codex_total("2026-09-10T12:00:00Z", "gpt-5.5", 1_000, 0, 100),
+            codex_total("2026-09-10T12:01:00Z", "gpt-5.5", 2_500, 0, 300)
+        ),
+    );
+    let result = scanner::scan_with_options(env.options(1, Some(today))).unwrap();
+    assert_eq!(codex_sum(&result.entries, "gpt-5.5").0, 2_500);
+}
+
+#[test]
+fn claude_half_written_last_line_is_counted_once_it_is_complete() {
+    // Same rule on the Claude side, which reads its logs the same way.
+    let env = TempEnv::new("claude_partial_line");
+    let today = NaiveDate::from_ymd_opt(2026, 4, 25).unwrap();
+    let (head, assistant) = CLAUDE_TZ_STABLE.split_once('\n').unwrap();
+    let assistant = assistant.trim_end();
+    let (written, rest) = assistant.split_at(assistant.len() / 2);
+    env.write_claude("proj", "s.jsonl", &format!("{head}\n{written}"));
+
+    let mut warm = env.options(1, Some(today));
+    warm.force_rescan = false;
+    let first = scanner::scan_with_options(warm.clone()).unwrap();
+    assert!(first.entries.iter().all(|e| e.model != "claude-haiku-4-5"));
+
+    env.write_claude("proj", "s.jsonl", &format!("{head}\n{written}{rest}\n"));
+    let completed = scanner::scan_with_options(warm).unwrap();
+    let e = pick(
+        &completed.entries,
+        "2026-04-25",
+        "Claude",
+        "claude-haiku-4-5",
+    );
+    assert_eq!((e.input_tokens, e.output_tokens), (100, 50));
+    let m = pick(
+        &completed.entries,
+        "2026-04-25",
+        "Claude",
+        CLAUDE_MSG_BUCKET_MODEL,
+    );
+    assert_eq!(m.message_count, 2);
+}
+
+// ========================================================================
+// Codex — the accounting cases shared with the macOS app
+// ========================================================================
+
+/// The macOS app's Codex accounting cases, copied unchanged from
+/// `CLI Pulse Bar/CLIPulseCore/Tests/Fixtures/codex-accounting-cases.json` in
+/// cli-pulse/cli-pulse-private (commit 89156f66). Both apps must report the
+/// same tokens per day and model for them, so the two cannot drift apart
+/// unnoticed. When the Mac's copy changes, copy it again.
+const MAC_CODEX_CASES: &str = include_str!("fixtures/codex-accounting-cases.json");
+
+/// Cases the desktop deliberately counts differently from the Mac, with what
+/// the desktop reports instead. Each is asserted both ways: the desktop's own
+/// number, and that it still differs from the Mac's, so a change on either
+/// side has to update this list.
+///
+/// - `copied_history_before_meta`: a sub-agent file that starts with a copy of
+///   its parent's history. The Mac leaves out events stamped before the
+///   sub-agent's own `session_meta`; the desktop has no sub-agent rules and
+///   counts the copied history instead of the sub-agent's own two requests,
+///   which fall below the copied counter.
+const DESKTOP_DIFFERS_FROM_MAC: &[(&str, &str)] = &[(
+    "copied_history_before_meta",
+    r#"{"2026-09-20": {"gpt-5.5": [6000, 4600, 300]}}"#,
+)];
+
+type DayModelTokens = BTreeMap<String, BTreeMap<String, [i64; 3]>>;
+
+fn tokens_from_json(v: &serde_json::Value) -> DayModelTokens {
+    let mut out = DayModelTokens::new();
+    for (day, models) in v.as_object().expect("day map") {
+        for (model, t) in models.as_object().expect("model map") {
+            let t: Vec<i64> = t
+                .as_array()
+                .expect("[input, cached, output]")
+                .iter()
+                .map(|n| n.as_i64().unwrap())
+                .collect();
+            out.entry(day.clone())
+                .or_default()
+                .insert(model.clone(), [t[0], t[1], t[2]]);
+        }
+    }
+    out
+}
+
+fn codex_tokens(entries: &[DailyEntry]) -> DayModelTokens {
+    let mut out = DayModelTokens::new();
+    for e in entries.iter().filter(|e| e.provider == "Codex") {
+        let slot = out
+            .entry(e.date.clone())
+            .or_default()
+            .entry(e.model.clone())
+            .or_insert([0, 0, 0]);
+        slot[0] += e.input_tokens;
+        slot[1] += e.cached_tokens;
+        slot[2] += e.output_tokens;
+    }
+    out
+}
+
+/// Write each file of a case under `home`, keeping the first `keep(n)` of
+/// its `n` lines. Lines are compact JSON, one per line, as Codex writes them.
+fn write_case_files(home: &Path, case: &serde_json::Value, keep: impl Fn(usize) -> usize) {
+    for file in case["files"].as_array().unwrap() {
+        let path = home.join(file["path"].as_str().unwrap());
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let lines = file["lines"].as_array().unwrap();
+        let mut body = String::new();
+        for line in &lines[..keep(lines.len())] {
+            body.push_str(&serde_json::to_string(line).unwrap());
+            body.push('\n');
+        }
+        fs::write(&path, body).unwrap();
+    }
+}
+
+#[test]
+fn codex_accounting_matches_the_mac_on_the_shared_cases() {
+    let fixture: serde_json::Value = serde_json::from_str(MAC_CODEX_CASES).unwrap();
+    let today = chrono::DateTime::parse_from_rfc3339(fixture["now_utc"].as_str().unwrap())
+        .unwrap()
+        .with_timezone(&chrono::Local)
+        .date_naive();
+    let days = fixture["days_to_scan"].as_u64().unwrap() as u32;
+    let cases = fixture["cases"].as_array().unwrap();
+    assert!(cases.len() >= 11, "fixture lost cases");
+    for (name, _) in DESKTOP_DIFFERS_FROM_MAC {
+        assert!(
+            cases.iter().any(|c| c["name"] == *name),
+            "{name} is listed as a known difference but is not in the fixture"
+        );
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    for case in cases {
+        let name = case["name"].as_str().unwrap();
+        let mac = tokens_from_json(&case["expected"]);
+        let known = DESKTOP_DIFFERS_FROM_MAC.iter().find(|(n, _)| *n == name);
+        let want = match known {
+            Some((_, desktop)) => {
+                let desktop = tokens_from_json(&serde_json::from_str(desktop).unwrap());
+                if desktop == mac {
+                    failures.push(format!(
+                        "{name}: listed as a known difference, but the Mac now expects the same"
+                    ));
+                }
+                desktop
+            }
+            None => mac,
+        };
+
+        let env = TempEnv::new(&format!("mac_case_{name}"));
+        let home = env.root.join("codex-home");
+        let mut opts = env.options(days, Some(today));
+        opts.codex_roots_override =
+            Some(vec![home.join("sessions"), home.join("archived_sessions")]);
+        let scan = |force: bool| {
+            let mut o = opts.clone();
+            o.force_rescan = force;
+            codex_tokens(&scanner::scan_with_options(o).unwrap().entries)
+        };
+
+        // 1. A full scan.
+        write_case_files(&home, case, |n| n);
+        let full = scan(true);
+        // 2. A warm scan that reuses the cache the full scan saved.
+        let warm = scan(false);
+        // 3. Incremental: every file half written and scanned, then completed
+        //    and scanned again, so each resumes from its saved state.
+        let _ = fs::remove_dir_all(&home);
+        let _ = fs::remove_dir_all(&env.cache_dir);
+        write_case_files(&home, case, |n| n / 2);
+        let _ = scan(false);
+        write_case_files(&home, case, |n| n);
+        let incremental = scan(false);
+
+        for (how, got) in [("full", full), ("warm", warm), ("incremental", incremental)] {
+            if got != want {
+                failures.push(format!("{name} ({how} scan): got {got:?}, want {want:?}"));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "desktop Codex accounting disagrees with the shared cases:\n{}",
+        failures.join("\n")
     );
 }

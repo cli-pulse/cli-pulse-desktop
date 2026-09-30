@@ -18,7 +18,13 @@
 //!   requests made before the change (`CODEX_EARLIER_RATES`). Pass the request's
 //!   time; `None` means today's rates.
 //! - **Aliases.** A few names OpenAI routes to a priced model (`gpt-5.6` is Sol)
-//!   are resolved by `normalize_codex_model`.
+//!   are billed at that model's rates. Only the price lookup resolves them: the
+//!   model is stored, uploaded and shown under the name Codex logged, as the
+//!   macOS app does.
+//!
+//! Codex cost is computed while parsing and cached per file, so the cache
+//! records `codex_pricing_fingerprint()` and is rebuilt when any of the above
+//! changes (see `cache::load`).
 //!
 // Codex rate rows, the dated rates, the aliases and the long-context rule are
 // derived from steipete/CodexBar
@@ -352,26 +358,36 @@ static CLAUDE_BEDROCK_VER_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"-v\d+:\d+$
 static CLAUDE_FAMILY_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^claude-(opus|sonnet|haiku)-\d+-\d+$").unwrap());
 
-/// Names OpenAI routes to a priced model.
+/// Names OpenAI routes to a priced model: `(alias, model it is billed as)`.
+///
+/// Used only to find a request's rates (`codex_price_key`). The model keeps
+/// the name Codex logged everywhere else. Renaming it would change the stored
+/// and uploaded model name, and the daily rows already uploaded under the old
+/// name would stay beside the new ones (the upload only ever upserts).
+const CODEX_ALIASES: &[(&str, &str)] = &[
+    // The unsuffixed gpt-5.6 is Sol.
+    ("gpt-5.6", "gpt-5.6-sol"),
+    // Codex's name for the Luna Reserve quota bucket.
+    ("gpt-reserve", "gpt-5.6-luna"),
+    // The Daybreak aliases point to Sol (blue) and Cyber (red).
+    ("gpt-daybreak-blue-latest", "gpt-5.6-sol"),
+    ("gpt-daybreak-red-latest", "gpt-5.6-cyber"),
+];
+
 fn codex_alias(model: &str) -> Option<&'static str> {
-    match model {
-        // The unsuffixed gpt-5.6 is Sol.
-        "gpt-5.6" => Some("gpt-5.6-sol"),
-        // Codex's name for the Luna Reserve quota bucket.
-        "gpt-reserve" => Some("gpt-5.6-luna"),
-        // The Daybreak aliases point to Sol (blue) and Cyber (red).
-        "gpt-daybreak-blue-latest" => Some("gpt-5.6-sol"),
-        "gpt-daybreak-red-latest" => Some("gpt-5.6-cyber"),
-        _ => None,
-    }
+    CODEX_ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == model)
+        .map(|(_, target)| *target)
 }
 
+/// The model name Codex cost is stored and shown under: the logged name
+/// without an `openai/` prefix, and without a date suffix when the undated
+/// name has rates. Aliases are NOT resolved here (see `CODEX_ALIASES`). Same
+/// rule as the macOS app's `normalizeCodexModel`.
 pub fn normalize_codex_model(raw: &str) -> String {
     let trimmed = raw.trim();
     let trimmed = trimmed.strip_prefix("openai/").unwrap_or(trimmed);
-    if let Some(target) = codex_alias(trimmed) {
-        return target.to_string();
-    }
     if CODEX_MODELS.contains_key(trimmed) {
         return trimmed.to_string();
     }
@@ -469,23 +485,111 @@ fn claude_family_fallback(model: &str) -> Option<String> {
     best_key.map(|k| k.to_string())
 }
 
+/// The rate row `model` is billed at: its own, else the one its alias names.
+/// `None` when neither has rates.
+pub fn codex_price_key(model: &str) -> Option<&'static str> {
+    let normalized = normalize_codex_model(model);
+    if let Some((key, _)) = CODEX_MODELS.get_key_value(normalized.as_str()) {
+        return Some(*key);
+    }
+    codex_alias(&normalized).filter(|target| CODEX_MODELS.contains_key(*target))
+}
+
 /// Whether `model` has Codex rates. A model without them has no cost at all
 /// (shown as unknown), which is different from a model priced at zero.
 pub fn codex_model_is_priced(model: &str) -> bool {
-    CODEX_MODELS.contains_key(normalize_codex_model(model).as_str())
+    codex_price_key(model).is_some()
 }
 
 /// The rates `model` had at `at_unix_ms` (`None` = today's rates).
 pub fn codex_rates_at(model: &str, at_unix_ms: Option<i64>) -> Option<CodexModel> {
-    let key = normalize_codex_model(model);
-    if let (Some(at), Some((repriced_at, earlier))) =
-        (at_unix_ms, CODEX_EARLIER_RATES.get(key.as_str()))
-    {
+    let key = codex_price_key(model)?;
+    if let (Some(at), Some((repriced_at, earlier))) = (at_unix_ms, CODEX_EARLIER_RATES.get(key)) {
         if at < *repriced_at {
             return Some(*earlier);
         }
     }
-    CODEX_MODELS.get(key.as_str()).copied()
+    CODEX_MODELS.get(key).copied()
+}
+
+/// A digest of everything that decides what a Codex request costs: every rate
+/// row, the earlier (dated) rates, the aliases and the long-context threshold.
+///
+/// Codex cost is worked out while a file is parsed and kept in the scan cache,
+/// so without this a table change would not reach requests already parsed: a
+/// repriced model would keep its old cost, and a model that just gained rates
+/// would show `$0.00` for its cached requests as if that were its price. The
+/// Codex cache records this digest and is rebuilt when it differs
+/// (`cache::load`), so editing the table needs no manual version bump.
+pub fn codex_pricing_fingerprint() -> String {
+    static FINGERPRINT: Lazy<String> = Lazy::new(|| {
+        codex_pricing_fingerprint_of(
+            &CODEX_MODELS,
+            &CODEX_EARLIER_RATES,
+            CODEX_ALIASES,
+            CODEX_LONG_CONTEXT_INPUT_TOKENS,
+        )
+    });
+    FINGERPRINT.clone()
+}
+
+fn codex_pricing_fingerprint_of(
+    models: &HashMap<&str, CodexModel>,
+    earlier: &HashMap<&str, (i64, CodexModel)>,
+    aliases: &[(&str, &str)],
+    long_context_input_tokens: i64,
+) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+
+    // Rates are written as their exact bits, so any change to a row shows.
+    fn put_rates(out: &mut String, r: &CodexRates) {
+        let cached = r
+            .cache_read
+            .map_or_else(|| "-".to_string(), |c| format!("{:016x}", c.to_bits()));
+        let _ = write!(
+            out,
+            "{:016x}/{cached}/{:016x};",
+            r.input.to_bits(),
+            r.output.to_bits()
+        );
+    }
+    fn put_model(out: &mut String, m: &CodexModel) {
+        put_rates(out, &m.standard);
+        match &m.long_context {
+            Some(long) => put_rates(out, long),
+            None => out.push_str("-;"),
+        }
+    }
+
+    // Sorted, so the digest does not depend on hash-map order.
+    let mut text = format!("long_context_input_tokens={long_context_input_tokens}\n");
+    let mut names: Vec<&&str> = models.keys().collect();
+    names.sort();
+    for name in names {
+        let _ = write!(text, "model {name} ");
+        put_model(&mut text, &models[name]);
+        text.push('\n');
+    }
+    let mut names: Vec<&&str> = earlier.keys().collect();
+    names.sort();
+    for name in names {
+        let (until, rates) = &earlier[name];
+        let _ = write!(text, "earlier {name} until {until} ");
+        put_model(&mut text, rates);
+        text.push('\n');
+    }
+    let mut sorted_aliases = aliases.to_vec();
+    sorted_aliases.sort();
+    for (alias, target) in sorted_aliases {
+        let _ = writeln!(text, "alias {alias} {target}");
+    }
+
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// USD cost of ONE Codex request, at the rates in force at `at_unix_ms`
@@ -815,27 +919,183 @@ mod tests {
     }
 
     #[test]
-    fn codex_aliases_resolve_to_priced_models() {
-        assert_eq!(normalize_codex_model("gpt-5.6"), "gpt-5.6-sol");
-        assert_eq!(normalize_codex_model("openai/gpt-5.6"), "gpt-5.6-sol");
-        assert_eq!(normalize_codex_model("gpt-reserve"), "gpt-5.6-luna");
+    fn codex_aliases_are_billed_as_their_model() {
+        assert_eq!(codex_price_key("gpt-5.6"), Some("gpt-5.6-sol"));
+        assert_eq!(codex_price_key("openai/gpt-5.6"), Some("gpt-5.6-sol"));
+        assert_eq!(codex_price_key("gpt-reserve"), Some("gpt-5.6-luna"));
         assert_eq!(
-            normalize_codex_model("gpt-daybreak-blue-latest"),
-            "gpt-5.6-sol"
+            codex_price_key("gpt-daybreak-blue-latest"),
+            Some("gpt-5.6-sol")
         );
         assert_eq!(
-            normalize_codex_model("gpt-daybreak-red-latest"),
-            "gpt-5.6-cyber"
+            codex_price_key("gpt-daybreak-red-latest"),
+            Some("gpt-5.6-cyber")
         );
         assert_eq!(
-            normalize_codex_model("gpt-6-astra-2026-09-01"),
-            "gpt-6-astra"
+            codex_price_key("gpt-6-astra-2026-09-01"),
+            Some("gpt-6-astra")
         );
+        assert_eq!(codex_price_key("gpt-42-unicorn"), None);
         // An alias is priced exactly like its target, dated rates included.
         assert_eq!(
             codex_cost_usd("gpt-5.6", 1_000, 0, 0, Some(AUG_20_NOON_MS)),
             codex_cost_usd("gpt-5.6-sol", 1_000, 0, 0, Some(AUG_20_NOON_MS))
         );
+        assert_eq!(
+            codex_cost_usd("gpt-reserve", 1_000, 0, 0, None),
+            codex_cost_usd("gpt-5.6-luna", 1_000, 0, 0, None)
+        );
+    }
+
+    #[test]
+    fn codex_aliases_keep_the_logged_name() {
+        // The stored, uploaded and displayed name is the one Codex logged, as
+        // on the Mac. Renaming it would leave the rows already uploaded under
+        // the old name beside new ones under the target's name.
+        assert_eq!(normalize_codex_model("gpt-5.6"), "gpt-5.6");
+        assert_eq!(normalize_codex_model("openai/gpt-5.6"), "gpt-5.6");
+        assert_eq!(normalize_codex_model("gpt-reserve"), "gpt-reserve");
+        assert_eq!(
+            normalize_codex_model("gpt-daybreak-red-latest"),
+            "gpt-daybreak-red-latest"
+        );
+        // The prefix and a date suffix on a priced model are still stripped.
+        assert_eq!(
+            normalize_codex_model("openai/gpt-6-astra-2026-09-01"),
+            "gpt-6-astra"
+        );
+    }
+
+    #[test]
+    fn every_alias_names_a_priced_model() {
+        for (alias, target) in CODEX_ALIASES {
+            assert!(
+                CODEX_MODELS.contains_key(target),
+                "{alias} -> {target}, which has no rates"
+            );
+            assert!(
+                !CODEX_MODELS.contains_key(alias),
+                "{alias} is both an alias and a row; the row would win"
+            );
+        }
+    }
+
+    // ---- The pricing fingerprint the Codex scan cache is checked against ----
+
+    fn fingerprint(
+        models: &HashMap<&str, CodexModel>,
+        earlier: &HashMap<&str, (i64, CodexModel)>,
+        aliases: &[(&str, &str)],
+        threshold: i64,
+    ) -> String {
+        codex_pricing_fingerprint_of(models, earlier, aliases, threshold)
+    }
+
+    #[test]
+    fn pricing_fingerprint_is_the_current_tables() {
+        assert_eq!(
+            codex_pricing_fingerprint(),
+            fingerprint(
+                &CODEX_MODELS,
+                &CODEX_EARLIER_RATES,
+                CODEX_ALIASES,
+                CODEX_LONG_CONTEXT_INPUT_TOKENS
+            )
+        );
+        assert_eq!(codex_pricing_fingerprint().len(), 16);
+        // Stable across calls and independent of hash-map order.
+        let mut reordered: HashMap<&str, CodexModel> = HashMap::new();
+        let mut names: Vec<_> = CODEX_MODELS.keys().copied().collect();
+        names.sort_unstable();
+        names.reverse();
+        for name in names {
+            reordered.insert(name, CODEX_MODELS[name]);
+        }
+        assert_eq!(
+            fingerprint(
+                &reordered,
+                &CODEX_EARLIER_RATES,
+                CODEX_ALIASES,
+                CODEX_LONG_CONTEXT_INPUT_TOKENS
+            ),
+            codex_pricing_fingerprint()
+        );
+    }
+
+    #[test]
+    fn pricing_fingerprint_changes_with_every_part_of_the_table() {
+        let base_models: HashMap<&str, CodexModel> = CODEX_MODELS.clone();
+        let base_earlier: HashMap<&str, (i64, CodexModel)> = CODEX_EARLIER_RATES.clone();
+        let base_aliases: Vec<(&str, &str)> = CODEX_ALIASES.to_vec();
+        let threshold = CODEX_LONG_CONTEXT_INPUT_TOKENS;
+        let base = fingerprint(&base_models, &base_earlier, &base_aliases, threshold);
+
+        let mut changed: Vec<(&str, String)> = Vec::new();
+
+        let mut m = base_models.clone();
+        m.insert("gpt-6.2", flat(1e-6, Some(1e-7), 1e-5));
+        changed.push((
+            "a new row",
+            fingerprint(&m, &base_earlier, &base_aliases, threshold),
+        ));
+
+        let mut m = base_models.clone();
+        m.get_mut("gpt-5.5").unwrap().standard.output = 3.1e-5;
+        changed.push((
+            "an output rate",
+            fingerprint(&m, &base_earlier, &base_aliases, threshold),
+        ));
+
+        let mut m = base_models.clone();
+        m.get_mut("gpt-5.5").unwrap().standard.cache_read = None;
+        changed.push((
+            "a cached rate removed",
+            fingerprint(&m, &base_earlier, &base_aliases, threshold),
+        ));
+
+        let mut m = base_models.clone();
+        m.get_mut("gpt-6-astra").unwrap().long_context = None;
+        changed.push((
+            "a long-context tier removed",
+            fingerprint(&m, &base_earlier, &base_aliases, threshold),
+        ));
+
+        let mut e = base_earlier.clone();
+        e.get_mut("gpt-5.6-sol").unwrap().0 += 86_400_000;
+        changed.push((
+            "a repricing date",
+            fingerprint(&base_models, &e, &base_aliases, threshold),
+        ));
+
+        let mut e = base_earlier.clone();
+        e.get_mut("gpt-5.6-luna").unwrap().1.standard.input = 9e-7;
+        changed.push((
+            "an earlier rate",
+            fingerprint(&base_models, &e, &base_aliases, threshold),
+        ));
+
+        let mut a = base_aliases.clone();
+        a.push(("gpt-6", "gpt-6-sol"));
+        changed.push((
+            "a new alias",
+            fingerprint(&base_models, &base_earlier, &a, threshold),
+        ));
+
+        let mut a = base_aliases.clone();
+        a[0].1 = "gpt-5.6-terra";
+        changed.push((
+            "an alias target",
+            fingerprint(&base_models, &base_earlier, &a, threshold),
+        ));
+
+        changed.push((
+            "the long-context threshold",
+            fingerprint(&base_models, &base_earlier, &base_aliases, 400_000),
+        ));
+
+        for (what, fp) in changed {
+            assert_ne!(fp, base, "changing {what} left the fingerprint as it was");
+        }
     }
 
     #[test]

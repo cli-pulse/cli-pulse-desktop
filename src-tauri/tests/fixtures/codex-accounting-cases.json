@@ -1,0 +1,2815 @@
+{
+ "about": "Codex accounting fixtures. CodexAccountingFixtureTests (Swift) and scripts/test_codex_accounting_replica.py (Python replica) both write each case's files under an empty Codex home and must report exactly `expected`: per local day, per model, [input, cached, output]. Scan as of now_utc with days_to_scan. Line shapes follow real Codex rollouts; every value is invented. Timestamps sit between 11:00 and 13:00 UTC so the local day is the same in any time zone within 11 hours of UTC. Each line is written as compact JSON, one per line.",
+ "now_utc": "2026-09-30T12:00:00Z",
+ "days_to_scan": 30,
+ "cases": [
+  {
+   "name": "parent_and_two_subagents",
+   "description": "A parent rollout and two subagent rollouts. The subagents carry the parent's session_id and their own payload.id; each counts. Keying files on session_id drops both subagents.",
+   "files": [
+    {
+     "path": "sessions/2026/09/10/rollout-2026-09-10T12-00-00-11111111-0000-4000-8000-000000000001.jsonl",
+     "lines": [
+      {
+       "timestamp": "2026-09-10T12:00:00.000Z",
+       "type": "session_meta",
+       "ordinal": 0,
+       "payload": {
+        "id": "11111111-0000-4000-8000-000000000001",
+        "timestamp": "2026-09-10T12:00:00.000Z",
+        "cwd": "/work/project",
+        "originator": "codex_cli",
+        "cli_version": "0.0.0",
+        "source": "vscode",
+        "model_provider": "openai",
+        "base_instructions": {
+         "text": "Neutral fixture instructions."
+        },
+        "context_window": 272000,
+        "history_mode": "paginated",
+        "thread_source": "user",
+        "session_id": "11111111-0000-4000-8000-000000000001"
+       }
+      },
+      {
+       "timestamp": "2026-09-10T12:00:10.000Z",
+       "type": "turn_context",
+       "ordinal": 1,
+       "payload": {
+        "cwd": "/work/project",
+        "model": "gpt-5.5",
+        "turn_id": "turn-1"
+       }
+      },
+      {
+       "timestamp": "2026-09-10T12:00:30.000Z",
+       "type": "event_msg",
+       "ordinal": 2,
+       "payload": {
+        "type": "token_count",
+        "info": null,
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-10T12:01:00.000Z",
+       "type": "event_msg",
+       "ordinal": 3,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 1000,
+          "cached_input_tokens": 800,
+          "output_tokens": 50,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1050,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 1000,
+          "cached_input_tokens": 800,
+          "output_tokens": 50,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1050,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-10T12:05:00.000Z",
+       "type": "event_msg",
+       "ordinal": 4,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 2500,
+          "cached_input_tokens": 2000,
+          "output_tokens": 120,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 2620,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 1500,
+          "cached_input_tokens": 1200,
+          "output_tokens": 70,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1570,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-10T12:20:00.000Z",
+       "type": "event_msg",
+       "ordinal": 5,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 4000,
+          "cached_input_tokens": 3200,
+          "output_tokens": 200,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 4200,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 1500,
+          "cached_input_tokens": 1200,
+          "output_tokens": 80,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1580,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "path": "sessions/2026/09/10/rollout-2026-09-10T12-02-00-11111111-0000-4000-8000-00000000000a.jsonl",
+     "lines": [
+      {
+       "timestamp": "2026-09-10T12:02:00.000Z",
+       "type": "session_meta",
+       "ordinal": 0,
+       "payload": {
+        "id": "11111111-0000-4000-8000-00000000000a",
+        "timestamp": "2026-09-10T12:02:00.000Z",
+        "cwd": "/work/project",
+        "originator": "codex_cli",
+        "cli_version": "0.0.0",
+        "source": {
+         "subagent": {
+          "thread_spawn": {
+           "parent_thread_id": "11111111-0000-4000-8000-000000000001",
+           "depth": 1
+          }
+         }
+        },
+        "model_provider": "openai",
+        "base_instructions": {
+         "text": "Neutral fixture instructions."
+        },
+        "context_window": 272000,
+        "history_mode": "paginated",
+        "thread_source": "user",
+        "session_id": "11111111-0000-4000-8000-000000000001",
+        "parent_thread_id": "11111111-0000-4000-8000-000000000001",
+        "agent_nickname": "helper",
+        "agent_path": "helper",
+        "multi_agent_version": 1,
+        "forked_from_id": "11111111-0000-4000-8000-000000000001",
+        "subagent_history_start_ordinal": 0
+       }
+      },
+      {
+       "timestamp": "2026-09-10T12:02:05.000Z",
+       "type": "turn_context",
+       "ordinal": 1,
+       "payload": {
+        "cwd": "/work/project",
+        "model": "gpt-5.4-mini",
+        "turn_id": "turn-1"
+       }
+      },
+      {
+       "timestamp": "2026-09-10T12:03:00.000Z",
+       "type": "event_msg",
+       "ordinal": 2,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 600,
+          "cached_input_tokens": 500,
+          "output_tokens": 30,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 630,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 600,
+          "cached_input_tokens": 500,
+          "output_tokens": 30,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 630,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-10T12:04:00.000Z",
+       "type": "event_msg",
+       "ordinal": 3,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 1400,
+          "cached_input_tokens": 1100,
+          "output_tokens": 60,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1460,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 800,
+          "cached_input_tokens": 600,
+          "output_tokens": 30,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 830,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "path": "sessions/2026/09/10/rollout-2026-09-10T12-06-00-11111111-0000-4000-8000-00000000000b.jsonl",
+     "lines": [
+      {
+       "timestamp": "2026-09-10T12:06:00.000Z",
+       "type": "session_meta",
+       "ordinal": 0,
+       "payload": {
+        "id": "11111111-0000-4000-8000-00000000000b",
+        "timestamp": "2026-09-10T12:06:00.000Z",
+        "cwd": "/work/project",
+        "originator": "codex_cli",
+        "cli_version": "0.0.0",
+        "source": {
+         "subagent": {
+          "thread_spawn": {
+           "parent_thread_id": "11111111-0000-4000-8000-000000000001",
+           "depth": 1
+          }
+         }
+        },
+        "model_provider": "openai",
+        "base_instructions": {
+         "text": "Neutral fixture instructions."
+        },
+        "context_window": 272000,
+        "history_mode": "paginated",
+        "thread_source": "user",
+        "session_id": "11111111-0000-4000-8000-000000000001",
+        "parent_thread_id": "11111111-0000-4000-8000-000000000001",
+        "agent_nickname": "helper",
+        "agent_path": "helper",
+        "multi_agent_version": 1,
+        "subagent_history_start_ordinal": 0
+       }
+      },
+      {
+       "timestamp": "2026-09-10T12:06:05.000Z",
+       "type": "turn_context",
+       "ordinal": 1,
+       "payload": {
+        "cwd": "/work/project",
+        "model": "gpt-5.4-mini",
+        "turn_id": "turn-1"
+       }
+      },
+      {
+       "timestamp": "2026-09-10T12:07:00.000Z",
+       "type": "event_msg",
+       "ordinal": 2,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 300,
+          "cached_input_tokens": 200,
+          "output_tokens": 10,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 310,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 300,
+          "cached_input_tokens": 200,
+          "output_tokens": 10,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 310,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-10T12:09:00.000Z",
+       "type": "event_msg",
+       "ordinal": 3,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 900,
+          "cached_input_tokens": 700,
+          "output_tokens": 40,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 940,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 600,
+          "cached_input_tokens": 500,
+          "output_tokens": 30,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 630,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "2026-09-10": {
+     "gpt-5.5": [
+      4000,
+      3200,
+      200
+     ],
+     "gpt-5.4-mini": [
+      2300,
+      1800,
+      100
+     ]
+    }
+   }
+  },
+  {
+   "name": "empty_shell_then_real_file",
+   "description": "Two files of one thread (same payload.id): the first by path has no token events, the second holds the thread's usage from a counter starting at zero. Both count. Keeping the first file per payload.id keeps the empty one and drops the usage.",
+   "files": [
+    {
+     "path": "sessions/2026/09/12/rollout-2026-09-12T13-00-00-22222222-0000-4000-8000-000000000002.jsonl",
+     "lines": [
+      {
+       "timestamp": "2026-09-12T13:00:00.000Z",
+       "type": "session_meta",
+       "ordinal": 0,
+       "payload": {
+        "id": "22222222-0000-4000-8000-000000000002",
+        "timestamp": "2026-09-12T13:00:00.000Z",
+        "cwd": "/work/project",
+        "originator": "codex_cli",
+        "cli_version": "0.0.0",
+        "source": "vscode",
+        "model_provider": "openai",
+        "base_instructions": {
+         "text": "Neutral fixture instructions."
+        },
+        "context_window": 272000,
+        "history_mode": "paginated",
+        "thread_source": "user",
+        "session_id": "22222222-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "timestamp": "2026-09-12T13:00:05.000Z",
+       "type": "turn_context",
+       "ordinal": 1,
+       "payload": {
+        "cwd": "/work/project",
+        "model": "gpt-5.5",
+        "turn_id": "turn-1"
+       }
+      }
+     ]
+    },
+    {
+     "path": "sessions/2026/09/12/rollout-2026-09-12T13-10-00-22222222-0000-4000-8000-000000000002.jsonl",
+     "lines": [
+      {
+       "timestamp": "2026-09-12T13:00:00.000Z",
+       "type": "session_meta",
+       "ordinal": 0,
+       "payload": {
+        "id": "22222222-0000-4000-8000-000000000002",
+        "timestamp": "2026-09-12T13:00:00.000Z",
+        "cwd": "/work/project",
+        "originator": "codex_cli",
+        "cli_version": "0.0.0",
+        "source": "vscode",
+        "model_provider": "openai",
+        "base_instructions": {
+         "text": "Neutral fixture instructions."
+        },
+        "context_window": 272000,
+        "history_mode": "paginated",
+        "thread_source": "user",
+        "session_id": "22222222-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "timestamp": "2026-09-12T13:10:05.000Z",
+       "type": "turn_context",
+       "ordinal": 1,
+       "payload": {
+        "cwd": "/work/project",
+        "model": "gpt-5.5",
+        "turn_id": "turn-1"
+       }
+      },
+      {
+       "timestamp": "2026-09-12T13:11:00.000Z",
+       "type": "event_msg",
+       "ordinal": 2,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 5000,
+          "cached_input_tokens": 4000,
+          "output_tokens": 100,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 5100,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 5000,
+          "cached_input_tokens": 4000,
+          "output_tokens": 100,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 5100,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-12T13:15:00.000Z",
+       "type": "event_msg",
+       "ordinal": 3,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 11000,
+          "cached_input_tokens": 9000,
+          "output_tokens": 220,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 11220,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 6000,
+          "cached_input_tokens": 5000,
+          "output_tokens": 120,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 6120,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-12T13:30:00.000Z",
+       "type": "event_msg",
+       "ordinal": 4,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 18000,
+          "cached_input_tokens": 15000,
+          "output_tokens": 360,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 18360,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 7000,
+          "cached_input_tokens": 6000,
+          "output_tokens": 140,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 7140,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "2026-09-12": {
+     "gpt-5.5": [
+      18000,
+      15000,
+      360
+     ]
+    }
+   }
+  },
+  {
+   "name": "continuation_without_overlap",
+   "description": "One thread continued in a second file a day later, its counter starting again from zero. The two files' events do not overlap in time, so both count.",
+   "files": [
+    {
+     "path": "sessions/2026/09/14/rollout-2026-09-14T11-00-00-33333333-0000-4000-8000-000000000003.jsonl",
+     "lines": [
+      {
+       "timestamp": "2026-09-14T11:00:00.000Z",
+       "type": "session_meta",
+       "ordinal": 0,
+       "payload": {
+        "id": "33333333-0000-4000-8000-000000000003",
+        "timestamp": "2026-09-14T11:00:00.000Z",
+        "cwd": "/work/project",
+        "originator": "codex_cli",
+        "cli_version": "0.0.0",
+        "source": "cli",
+        "model_provider": "openai",
+        "base_instructions": {
+         "text": "Neutral fixture instructions."
+        },
+        "context_window": 272000,
+        "history_mode": "paginated",
+        "thread_source": "user",
+        "session_id": "33333333-0000-4000-8000-000000000003"
+       }
+      },
+      {
+       "timestamp": "2026-09-14T11:00:05.000Z",
+       "type": "turn_context",
+       "ordinal": 1,
+       "payload": {
+        "cwd": "/work/project",
+        "model": "gpt-5.5",
+        "turn_id": "turn-1"
+       }
+      },
+      {
+       "timestamp": "2026-09-14T11:01:00.000Z",
+       "type": "event_msg",
+       "ordinal": 2,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 2000,
+          "cached_input_tokens": 1500,
+          "output_tokens": 40,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 2040,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 2000,
+          "cached_input_tokens": 1500,
+          "output_tokens": 40,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 2040,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-14T11:30:00.000Z",
+       "type": "event_msg",
+       "ordinal": 3,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 5000,
+          "cached_input_tokens": 4000,
+          "output_tokens": 100,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 5100,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 3000,
+          "cached_input_tokens": 2500,
+          "output_tokens": 60,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 3060,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "path": "sessions/2026/09/15/rollout-2026-09-15T11-00-00-33333333-0000-4000-8000-000000000003.jsonl",
+     "lines": [
+      {
+       "timestamp": "2026-09-15T11:00:00.000Z",
+       "type": "session_meta",
+       "ordinal": 0,
+       "payload": {
+        "id": "33333333-0000-4000-8000-000000000003",
+        "timestamp": "2026-09-15T11:00:00.000Z",
+        "cwd": "/work/project",
+        "originator": "codex_cli",
+        "cli_version": "0.0.0",
+        "source": "cli",
+        "model_provider": "openai",
+        "base_instructions": {
+         "text": "Neutral fixture instructions."
+        },
+        "context_window": 272000,
+        "history_mode": "paginated",
+        "thread_source": "user",
+        "session_id": "33333333-0000-4000-8000-000000000003"
+       }
+      },
+      {
+       "timestamp": "2026-09-15T11:00:05.000Z",
+       "type": "turn_context",
+       "ordinal": 1,
+       "payload": {
+        "cwd": "/work/project",
+        "model": "gpt-5.5",
+        "turn_id": "turn-1"
+       }
+      },
+      {
+       "timestamp": "2026-09-15T11:01:00.000Z",
+       "type": "event_msg",
+       "ordinal": 2,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 1000,
+          "cached_input_tokens": 800,
+          "output_tokens": 20,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1020,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 1000,
+          "cached_input_tokens": 800,
+          "output_tokens": 20,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1020,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-15T11:30:00.000Z",
+       "type": "event_msg",
+       "ordinal": 3,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 5000,
+          "cached_input_tokens": 3800,
+          "output_tokens": 100,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 5100,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 4000,
+          "cached_input_tokens": 3000,
+          "output_tokens": 80,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 4080,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "2026-09-14": {
+     "gpt-5.5": [
+      5000,
+      4000,
+      100
+     ]
+    },
+    "2026-09-15": {
+     "gpt-5.5": [
+      5000,
+      3800,
+      100
+     ]
+    }
+   }
+  },
+  {
+   "name": "byte_identical_copy",
+   "description": "The same rollout under sessions/ and, byte for byte, under archived_sessions/. Their events overlap exactly, so it counts once.",
+   "files": [
+    {
+     "path": "sessions/2026/09/16/rollout-2026-09-16T12-00-00-44444444-0000-4000-8000-000000000004.jsonl",
+     "lines": [
+      {
+       "timestamp": "2026-09-16T12:00:00.000Z",
+       "type": "session_meta",
+       "ordinal": 0,
+       "payload": {
+        "id": "44444444-0000-4000-8000-000000000004",
+        "timestamp": "2026-09-16T12:00:00.000Z",
+        "cwd": "/work/project",
+        "originator": "codex_cli",
+        "cli_version": "0.0.0",
+        "source": "cli",
+        "model_provider": "openai",
+        "base_instructions": {
+         "text": "Neutral fixture instructions."
+        },
+        "context_window": 272000,
+        "history_mode": "paginated",
+        "thread_source": "user",
+        "session_id": "44444444-0000-4000-8000-000000000004"
+       }
+      },
+      {
+       "timestamp": "2026-09-16T12:00:05.000Z",
+       "type": "turn_context",
+       "ordinal": 1,
+       "payload": {
+        "cwd": "/work/project",
+        "model": "gpt-5.5",
+        "turn_id": "turn-1"
+       }
+      },
+      {
+       "timestamp": "2026-09-16T12:01:00.000Z",
+       "type": "event_msg",
+       "ordinal": 2,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 1200,
+          "cached_input_tokens": 1000,
+          "output_tokens": 30,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1230,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 1200,
+          "cached_input_tokens": 1000,
+          "output_tokens": 30,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1230,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-16T12:02:00.000Z",
+       "type": "event_msg",
+       "ordinal": 3,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 3000,
+          "cached_input_tokens": 2500,
+          "output_tokens": 80,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 3080,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 1800,
+          "cached_input_tokens": 1500,
+          "output_tokens": 50,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1850,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "path": "archived_sessions/rollout-2026-09-16T12-00-00-44444444-0000-4000-8000-000000000004.jsonl",
+     "lines": [
+      {
+       "timestamp": "2026-09-16T12:00:00.000Z",
+       "type": "session_meta",
+       "ordinal": 0,
+       "payload": {
+        "id": "44444444-0000-4000-8000-000000000004",
+        "timestamp": "2026-09-16T12:00:00.000Z",
+        "cwd": "/work/project",
+        "originator": "codex_cli",
+        "cli_version": "0.0.0",
+        "source": "cli",
+        "model_provider": "openai",
+        "base_instructions": {
+         "text": "Neutral fixture instructions."
+        },
+        "context_window": 272000,
+        "history_mode": "paginated",
+        "thread_source": "user",
+        "session_id": "44444444-0000-4000-8000-000000000004"
+       }
+      },
+      {
+       "timestamp": "2026-09-16T12:00:05.000Z",
+       "type": "turn_context",
+       "ordinal": 1,
+       "payload": {
+        "cwd": "/work/project",
+        "model": "gpt-5.5",
+        "turn_id": "turn-1"
+       }
+      },
+      {
+       "timestamp": "2026-09-16T12:01:00.000Z",
+       "type": "event_msg",
+       "ordinal": 2,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 1200,
+          "cached_input_tokens": 1000,
+          "output_tokens": 30,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1230,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 1200,
+          "cached_input_tokens": 1000,
+          "output_tokens": 30,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1230,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-16T12:02:00.000Z",
+       "type": "event_msg",
+       "ordinal": 3,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 3000,
+          "cached_input_tokens": 2500,
+          "output_tokens": 80,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 3080,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 1800,
+          "cached_input_tokens": 1500,
+          "output_tokens": 50,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1850,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "2026-09-16": {
+     "gpt-5.5": [
+      3000,
+      2500,
+      80
+     ]
+    }
+   }
+  },
+  {
+   "name": "fork_with_inherited_counter",
+   "description": "A fork whose cumulative counter continues its parent's: its first event reports the parent's 5000 input plus its own 700. The inherited 5000 is not counted again.",
+   "files": [
+    {
+     "path": "sessions/2026/09/18/rollout-2026-09-18T12-00-00-55555555-0000-4000-8000-000000000005.jsonl",
+     "lines": [
+      {
+       "timestamp": "2026-09-18T12:00:00.000Z",
+       "type": "session_meta",
+       "ordinal": 0,
+       "payload": {
+        "id": "55555555-0000-4000-8000-000000000005",
+        "timestamp": "2026-09-18T12:00:00.000Z",
+        "cwd": "/work/project",
+        "originator": "codex_cli",
+        "cli_version": "0.0.0",
+        "source": "cli",
+        "model_provider": "openai",
+        "base_instructions": {
+         "text": "Neutral fixture instructions."
+        },
+        "context_window": 272000,
+        "history_mode": "paginated",
+        "thread_source": "user",
+        "session_id": "55555555-0000-4000-8000-000000000005"
+       }
+      },
+      {
+       "timestamp": "2026-09-18T12:00:05.000Z",
+       "type": "turn_context",
+       "ordinal": 1,
+       "payload": {
+        "cwd": "/work/project",
+        "model": "gpt-5.5",
+        "turn_id": "turn-1"
+       }
+      },
+      {
+       "timestamp": "2026-09-18T12:01:00.000Z",
+       "type": "event_msg",
+       "ordinal": 2,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 2000,
+          "cached_input_tokens": 1600,
+          "output_tokens": 100,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 2100,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 2000,
+          "cached_input_tokens": 1600,
+          "output_tokens": 100,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 2100,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-18T12:10:00.000Z",
+       "type": "event_msg",
+       "ordinal": 3,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 5000,
+          "cached_input_tokens": 4000,
+          "output_tokens": 300,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 5300,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 3000,
+          "cached_input_tokens": 2400,
+          "output_tokens": 200,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 3200,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "path": "sessions/2026/09/18/rollout-2026-09-18T12-30-00-55555555-0000-4000-8000-00000000000f.jsonl",
+     "lines": [
+      {
+       "timestamp": "2026-09-18T12:30:00.000Z",
+       "type": "session_meta",
+       "ordinal": 0,
+       "payload": {
+        "id": "55555555-0000-4000-8000-00000000000f",
+        "timestamp": "2026-09-18T12:30:00.000Z",
+        "cwd": "/work/project",
+        "originator": "codex_cli",
+        "cli_version": "0.0.0",
+        "source": "cli",
+        "model_provider": "openai",
+        "base_instructions": {
+         "text": "Neutral fixture instructions."
+        },
+        "context_window": 272000,
+        "history_mode": "paginated",
+        "thread_source": "user",
+        "session_id": "55555555-0000-4000-8000-00000000000f",
+        "forked_from_id": "55555555-0000-4000-8000-000000000005"
+       }
+      },
+      {
+       "timestamp": "2026-09-18T12:30:05.000Z",
+       "type": "turn_context",
+       "ordinal": 1,
+       "payload": {
+        "cwd": "/work/project",
+        "model": "gpt-5.5",
+        "turn_id": "turn-1"
+       }
+      },
+      {
+       "timestamp": "2026-09-18T12:31:00.000Z",
+       "type": "event_msg",
+       "ordinal": 2,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 5700,
+          "cached_input_tokens": 4500,
+          "output_tokens": 340,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 6040,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 700,
+          "cached_input_tokens": 500,
+          "output_tokens": 40,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 740,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-18T12:40:00.000Z",
+       "type": "event_msg",
+       "ordinal": 3,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 6500,
+          "cached_input_tokens": 5100,
+          "output_tokens": 380,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 6880,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 800,
+          "cached_input_tokens": 600,
+          "output_tokens": 40,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 840,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "2026-09-18": {
+     "gpt-5.5": [
+      6500,
+      5100,
+      380
+     ]
+    }
+   }
+  },
+  {
+   "name": "copied_history_before_meta",
+   "description": "A subagent file that begins with a copy of its parent's history: the parent's session_meta and token events, stamped before the subagent's own session_meta. Only the events after it are the subagent's.",
+   "files": [
+    {
+     "path": "sessions/2026/09/20/rollout-2026-09-20T11-45-00-66666666-0000-4000-8000-000000000006.jsonl",
+     "lines": [
+      {
+       "timestamp": "2026-09-20T11:45:00.000Z",
+       "type": "session_meta",
+       "ordinal": 0,
+       "payload": {
+        "id": "66666666-0000-4000-8000-000000000006",
+        "timestamp": "2026-09-20T11:45:00.000Z",
+        "cwd": "/work/project",
+        "originator": "codex_cli",
+        "cli_version": "0.0.0",
+        "source": "cli",
+        "model_provider": "openai",
+        "base_instructions": {
+         "text": "Neutral fixture instructions."
+        },
+        "context_window": 272000,
+        "history_mode": "paginated",
+        "thread_source": "user",
+        "session_id": "66666666-0000-4000-8000-000000000006"
+       }
+      },
+      {
+       "timestamp": "2026-09-20T11:45:05.000Z",
+       "type": "turn_context",
+       "ordinal": 1,
+       "payload": {
+        "cwd": "/work/project",
+        "model": "gpt-5.5",
+        "turn_id": "turn-1"
+       }
+      },
+      {
+       "timestamp": "2026-09-20T11:50:00.000Z",
+       "type": "event_msg",
+       "ordinal": 2,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 2000,
+          "cached_input_tokens": 1500,
+          "output_tokens": 100,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 2100,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 2000,
+          "cached_input_tokens": 1500,
+          "output_tokens": 100,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 2100,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-20T11:55:00.000Z",
+       "type": "event_msg",
+       "ordinal": 3,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 3000,
+          "cached_input_tokens": 2300,
+          "output_tokens": 150,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 3150,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 1000,
+          "cached_input_tokens": 800,
+          "output_tokens": 50,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1050,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "path": "sessions/2026/09/20/rollout-2026-09-20T12-10-00-66666666-0000-4000-8000-00000000000c.jsonl",
+     "lines": [
+      {
+       "timestamp": "2026-09-20T12:10:00.000Z",
+       "type": "session_meta",
+       "ordinal": 0,
+       "payload": {
+        "id": "66666666-0000-4000-8000-00000000000c",
+        "timestamp": "2026-09-20T12:10:00.000Z",
+        "cwd": "/work/project",
+        "originator": "codex_cli",
+        "cli_version": "0.0.0",
+        "source": {
+         "subagent": {
+          "thread_spawn": {
+           "parent_thread_id": "66666666-0000-4000-8000-000000000006",
+           "depth": 1
+          }
+         }
+        },
+        "model_provider": "openai",
+        "base_instructions": {
+         "text": "Neutral fixture instructions."
+        },
+        "context_window": 272000,
+        "history_mode": "paginated",
+        "thread_source": "user",
+        "session_id": "66666666-0000-4000-8000-000000000006",
+        "parent_thread_id": "66666666-0000-4000-8000-000000000006",
+        "agent_nickname": "helper",
+        "agent_path": "helper",
+        "multi_agent_version": 1,
+        "forked_from_id": "66666666-0000-4000-8000-000000000006",
+        "subagent_history_start_ordinal": 4
+       }
+      },
+      {
+       "timestamp": "2026-09-20T11:45:00.000Z",
+       "type": "session_meta",
+       "ordinal": 0,
+       "payload": {
+        "id": "66666666-0000-4000-8000-000000000006",
+        "timestamp": "2026-09-20T11:45:00.000Z",
+        "cwd": "/work/project",
+        "originator": "codex_cli",
+        "cli_version": "0.0.0",
+        "source": "cli",
+        "model_provider": "openai",
+        "base_instructions": {
+         "text": "Neutral fixture instructions."
+        },
+        "context_window": 272000,
+        "history_mode": "paginated",
+        "thread_source": "user",
+        "session_id": "66666666-0000-4000-8000-000000000006"
+       }
+      },
+      {
+       "timestamp": "2026-09-20T11:45:05.000Z",
+       "type": "turn_context",
+       "ordinal": 2,
+       "payload": {
+        "cwd": "/work/project",
+        "model": "gpt-5.5",
+        "turn_id": "turn-1"
+       }
+      },
+      {
+       "timestamp": "2026-09-20T11:50:00.000Z",
+       "type": "event_msg",
+       "ordinal": 3,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 2000,
+          "cached_input_tokens": 1500,
+          "output_tokens": 100,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 2100,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 2000,
+          "cached_input_tokens": 1500,
+          "output_tokens": 100,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 2100,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-20T11:55:00.000Z",
+       "type": "event_msg",
+       "ordinal": 4,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 3000,
+          "cached_input_tokens": 2300,
+          "output_tokens": 150,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 3150,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 1000,
+          "cached_input_tokens": 800,
+          "output_tokens": 50,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1050,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-20T12:10:05.000Z",
+       "type": "turn_context",
+       "ordinal": 5,
+       "payload": {
+        "cwd": "/work/project",
+        "model": "gpt-5.5",
+        "turn_id": "turn-1"
+       }
+      },
+      {
+       "timestamp": "2026-09-20T12:11:00.000Z",
+       "type": "event_msg",
+       "ordinal": 6,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 400,
+          "cached_input_tokens": 300,
+          "output_tokens": 20,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 420,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 400,
+          "cached_input_tokens": 300,
+          "output_tokens": 20,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 420,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-20T12:12:00.000Z",
+       "type": "event_msg",
+       "ordinal": 7,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 900,
+          "cached_input_tokens": 700,
+          "output_tokens": 45,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 945,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 500,
+          "cached_input_tokens": 400,
+          "output_tokens": 25,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 525,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "2026-09-20": {
+     "gpt-5.5": [
+      3900,
+      3000,
+      195
+     ]
+    }
+   }
+  },
+  {
+   "name": "counter_goes_down_and_back",
+   "description": "The cumulative total falls from 200 to 150 and climbs to 300. The baseline stays at 200, so the file counts 300 in all, not the 350 that re-counting the climb from 150 gives.",
+   "files": [
+    {
+     "path": "sessions/2026/09/22/rollout-2026-09-22T12-00-00-77777777-0000-4000-8000-000000000007.jsonl",
+     "lines": [
+      {
+       "timestamp": "2026-09-22T12:00:00.000Z",
+       "type": "session_meta",
+       "ordinal": 0,
+       "payload": {
+        "id": "77777777-0000-4000-8000-000000000007",
+        "timestamp": "2026-09-22T12:00:00.000Z",
+        "cwd": "/work/project",
+        "originator": "codex_cli",
+        "cli_version": "0.0.0",
+        "source": "cli",
+        "model_provider": "openai",
+        "base_instructions": {
+         "text": "Neutral fixture instructions."
+        },
+        "context_window": 272000,
+        "history_mode": "paginated",
+        "thread_source": "user",
+        "session_id": "77777777-0000-4000-8000-000000000007"
+       }
+      },
+      {
+       "timestamp": "2026-09-22T12:00:05.000Z",
+       "type": "turn_context",
+       "ordinal": 1,
+       "payload": {
+        "cwd": "/work/project",
+        "model": "gpt-5.5",
+        "turn_id": "turn-1"
+       }
+      },
+      {
+       "timestamp": "2026-09-22T12:01:00.000Z",
+       "type": "event_msg",
+       "ordinal": 2,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 100,
+          "cached_input_tokens": 80,
+          "output_tokens": 10,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 110,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 100,
+          "cached_input_tokens": 80,
+          "output_tokens": 10,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 110,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-22T12:02:00.000Z",
+       "type": "event_msg",
+       "ordinal": 3,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 200,
+          "cached_input_tokens": 160,
+          "output_tokens": 20,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 220,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 100,
+          "cached_input_tokens": 80,
+          "output_tokens": 10,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 110,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-22T12:03:00.000Z",
+       "type": "event_msg",
+       "ordinal": 4,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 150,
+          "cached_input_tokens": 120,
+          "output_tokens": 15,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 165,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 1,
+          "cached_input_tokens": 1,
+          "output_tokens": 1,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 2,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-22T12:04:00.000Z",
+       "type": "event_msg",
+       "ordinal": 5,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 250,
+          "cached_input_tokens": 200,
+          "output_tokens": 25,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 275,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 100,
+          "cached_input_tokens": 80,
+          "output_tokens": 10,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 110,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-22T12:05:00.000Z",
+       "type": "event_msg",
+       "ordinal": 6,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 300,
+          "cached_input_tokens": 240,
+          "output_tokens": 30,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 330,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 50,
+          "cached_input_tokens": 40,
+          "output_tokens": 5,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 55,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "2026-09-22": {
+     "gpt-5.5": [
+      300,
+      240,
+      30
+     ]
+    }
+   }
+  },
+  {
+   "name": "repeated_total",
+   "description": "The same cumulative total reported three times in a row adds nothing after the first; summing last_token_usage instead would count the request three times.",
+   "files": [
+    {
+     "path": "sessions/2026/09/24/rollout-2026-09-24T12-00-00-88888888-0000-4000-8000-000000000008.jsonl",
+     "lines": [
+      {
+       "timestamp": "2026-09-24T12:00:00.000Z",
+       "type": "session_meta",
+       "ordinal": 0,
+       "payload": {
+        "id": "88888888-0000-4000-8000-000000000008",
+        "timestamp": "2026-09-24T12:00:00.000Z",
+        "cwd": "/work/project",
+        "originator": "codex_cli",
+        "cli_version": "0.0.0",
+        "source": "cli",
+        "model_provider": "openai",
+        "base_instructions": {
+         "text": "Neutral fixture instructions."
+        },
+        "context_window": 272000,
+        "history_mode": "paginated",
+        "thread_source": "user",
+        "session_id": "88888888-0000-4000-8000-000000000008"
+       }
+      },
+      {
+       "timestamp": "2026-09-24T12:00:05.000Z",
+       "type": "turn_context",
+       "ordinal": 1,
+       "payload": {
+        "cwd": "/work/project",
+        "model": "gpt-5.5",
+        "turn_id": "turn-1"
+       }
+      },
+      {
+       "timestamp": "2026-09-24T12:01:00.000Z",
+       "type": "event_msg",
+       "ordinal": 2,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 100,
+          "cached_input_tokens": 50,
+          "output_tokens": 10,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 110,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 100,
+          "cached_input_tokens": 50,
+          "output_tokens": 10,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 110,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-24T12:01:01.000Z",
+       "type": "event_msg",
+       "ordinal": 3,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 100,
+          "cached_input_tokens": 50,
+          "output_tokens": 10,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 110,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 100,
+          "cached_input_tokens": 50,
+          "output_tokens": 10,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 110,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-24T12:01:02.000Z",
+       "type": "event_msg",
+       "ordinal": 4,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 100,
+          "cached_input_tokens": 50,
+          "output_tokens": 10,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 110,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 100,
+          "cached_input_tokens": 50,
+          "output_tokens": 10,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 110,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-24T12:02:00.000Z",
+       "type": "event_msg",
+       "ordinal": 5,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 200,
+          "cached_input_tokens": 100,
+          "output_tokens": 20,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 220,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 100,
+          "cached_input_tokens": 50,
+          "output_tokens": 10,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 110,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "2026-09-24": {
+     "gpt-5.5": [
+      200,
+      100,
+      20
+     ]
+    }
+   }
+  },
+  {
+   "name": "counter_restart_counts_only_above_the_old_high",
+   "description": "The counter restarts inside the file (the total drops to one request's own usage). The baseline only rises, so requests after the restart count only once the total passes the old high of 2000: 1000 + 1000 + 400. This undercounts a genuine restart; it is the price of never counting a replayed lineage twice.",
+   "files": [
+    {
+     "path": "sessions/2026/09/26/rollout-2026-09-26T12-00-00-99999999-0000-4000-8000-000000000009.jsonl",
+     "lines": [
+      {
+       "timestamp": "2026-09-26T12:00:00.000Z",
+       "type": "session_meta",
+       "ordinal": 0,
+       "payload": {
+        "id": "99999999-0000-4000-8000-000000000009",
+        "timestamp": "2026-09-26T12:00:00.000Z",
+        "cwd": "/work/project",
+        "originator": "codex_cli",
+        "cli_version": "0.0.0",
+        "source": "vscode",
+        "model_provider": "openai",
+        "base_instructions": {
+         "text": "Neutral fixture instructions."
+        },
+        "context_window": 272000,
+        "history_mode": "paginated",
+        "thread_source": "user",
+        "session_id": "99999999-0000-4000-8000-000000000009"
+       }
+      },
+      {
+       "timestamp": "2026-09-26T12:00:05.000Z",
+       "type": "turn_context",
+       "ordinal": 1,
+       "payload": {
+        "cwd": "/work/project",
+        "model": "gpt-5.5",
+        "turn_id": "turn-1"
+       }
+      },
+      {
+       "timestamp": "2026-09-26T12:01:00.000Z",
+       "type": "event_msg",
+       "ordinal": 2,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 1000,
+          "cached_input_tokens": 800,
+          "output_tokens": 50,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1050,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 1000,
+          "cached_input_tokens": 800,
+          "output_tokens": 50,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1050,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-26T12:02:00.000Z",
+       "type": "event_msg",
+       "ordinal": 3,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 2000,
+          "cached_input_tokens": 1600,
+          "output_tokens": 100,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 2100,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 1000,
+          "cached_input_tokens": 800,
+          "output_tokens": 50,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1050,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-26T12:03:00.000Z",
+       "type": "event_msg",
+       "ordinal": 4,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 300,
+          "cached_input_tokens": 200,
+          "output_tokens": 20,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 320,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 300,
+          "cached_input_tokens": 200,
+          "output_tokens": 20,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 320,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-26T12:04:00.000Z",
+       "type": "event_msg",
+       "ordinal": 5,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 700,
+          "cached_input_tokens": 500,
+          "output_tokens": 40,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 740,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 400,
+          "cached_input_tokens": 300,
+          "output_tokens": 20,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 420,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-26T12:05:00.000Z",
+       "type": "event_msg",
+       "ordinal": 6,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 2400,
+          "cached_input_tokens": 1900,
+          "output_tokens": 120,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 2520,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 1700,
+          "cached_input_tokens": 1400,
+          "output_tokens": 80,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1780,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "2026-09-26": {
+     "gpt-5.5": [
+      2400,
+      1900,
+      120
+     ]
+    }
+   }
+  },
+  {
+   "name": "last_usage_only",
+   "description": "Events that carry only last_token_usage (no cumulative total) count as reported.",
+   "files": [
+    {
+     "path": "sessions/2026/09/27/rollout-2026-09-27T12-00-00-aaaaaaaa-0000-4000-8000-00000000000a.jsonl",
+     "lines": [
+      {
+       "timestamp": "2026-09-27T12:00:00.000Z",
+       "type": "session_meta",
+       "ordinal": 0,
+       "payload": {
+        "id": "aaaaaaaa-0000-4000-8000-00000000000a",
+        "timestamp": "2026-09-27T12:00:00.000Z",
+        "cwd": "/work/project",
+        "originator": "codex_cli",
+        "cli_version": "0.0.0",
+        "source": "cli",
+        "model_provider": "openai",
+        "base_instructions": {
+         "text": "Neutral fixture instructions."
+        },
+        "context_window": 272000,
+        "history_mode": "paginated",
+        "thread_source": "user",
+        "session_id": "aaaaaaaa-0000-4000-8000-00000000000a"
+       }
+      },
+      {
+       "timestamp": "2026-09-27T12:00:05.000Z",
+       "type": "turn_context",
+       "ordinal": 1,
+       "payload": {
+        "cwd": "/work/project",
+        "model": "gpt-5.5",
+        "turn_id": "turn-1"
+       }
+      },
+      {
+       "timestamp": "2026-09-27T12:01:00.000Z",
+       "type": "event_msg",
+       "ordinal": 2,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "last_token_usage": {
+          "input_tokens": 100,
+          "cached_input_tokens": 50,
+          "output_tokens": 10,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 110,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-27T12:02:00.000Z",
+       "type": "event_msg",
+       "ordinal": 3,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "last_token_usage": {
+          "input_tokens": 200,
+          "cached_input_tokens": 100,
+          "output_tokens": 20,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 220,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "2026-09-27": {
+     "gpt-5.5": [
+      300,
+      150,
+      30
+     ]
+    }
+   }
+  },
+  {
+   "name": "continuation_that_carries_its_counter_over",
+   "description": "One thread continued in a second file whose counter picks up where the first file's ended: its first event reports the first file's 5000 input plus its own 1500. The files do not overlap, so both count, and the carried-over 5000 is counted once.",
+   "files": [
+    {
+     "path": "sessions/2026/09/28/rollout-2026-09-28T11-00-00-bbbbbbbb-0000-4000-8000-00000000000b.jsonl",
+     "lines": [
+      {
+       "timestamp": "2026-09-28T11:00:00.000Z",
+       "type": "session_meta",
+       "ordinal": 0,
+       "payload": {
+        "id": "bbbbbbbb-0000-4000-8000-00000000000b",
+        "timestamp": "2026-09-28T11:00:00.000Z",
+        "cwd": "/work/project",
+        "originator": "codex_cli",
+        "cli_version": "0.0.0",
+        "source": "cli",
+        "model_provider": "openai",
+        "base_instructions": {
+         "text": "Neutral fixture instructions."
+        },
+        "context_window": 272000,
+        "history_mode": "paginated",
+        "thread_source": "user",
+        "session_id": "bbbbbbbb-0000-4000-8000-00000000000b"
+       }
+      },
+      {
+       "timestamp": "2026-09-28T11:00:05.000Z",
+       "type": "turn_context",
+       "ordinal": 1,
+       "payload": {
+        "cwd": "/work/project",
+        "model": "gpt-5.5",
+        "turn_id": "turn-1"
+       }
+      },
+      {
+       "timestamp": "2026-09-28T11:01:00.000Z",
+       "type": "event_msg",
+       "ordinal": 2,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 3000,
+          "cached_input_tokens": 2400,
+          "output_tokens": 60,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 3060,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 3000,
+          "cached_input_tokens": 2400,
+          "output_tokens": 60,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 3060,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-28T11:20:00.000Z",
+       "type": "event_msg",
+       "ordinal": 3,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 5000,
+          "cached_input_tokens": 4000,
+          "output_tokens": 100,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 5100,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 2000,
+          "cached_input_tokens": 1600,
+          "output_tokens": 40,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 2040,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      }
+     ]
+    },
+    {
+     "path": "sessions/2026/09/28/rollout-2026-09-28T12-30-00-bbbbbbbb-0000-4000-8000-00000000000b.jsonl",
+     "lines": [
+      {
+       "timestamp": "2026-09-28T11:00:00.000Z",
+       "type": "session_meta",
+       "ordinal": 0,
+       "payload": {
+        "id": "bbbbbbbb-0000-4000-8000-00000000000b",
+        "timestamp": "2026-09-28T11:00:00.000Z",
+        "cwd": "/work/project",
+        "originator": "codex_cli",
+        "cli_version": "0.0.0",
+        "source": "cli",
+        "model_provider": "openai",
+        "base_instructions": {
+         "text": "Neutral fixture instructions."
+        },
+        "context_window": 272000,
+        "history_mode": "paginated",
+        "thread_source": "user",
+        "session_id": "bbbbbbbb-0000-4000-8000-00000000000b"
+       }
+      },
+      {
+       "timestamp": "2026-09-28T12:30:05.000Z",
+       "type": "turn_context",
+       "ordinal": 1,
+       "payload": {
+        "cwd": "/work/project",
+        "model": "gpt-5.5",
+        "turn_id": "turn-1"
+       }
+      },
+      {
+       "timestamp": "2026-09-28T12:31:00.000Z",
+       "type": "event_msg",
+       "ordinal": 2,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 6500,
+          "cached_input_tokens": 5200,
+          "output_tokens": 130,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 6630,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 1500,
+          "cached_input_tokens": 1200,
+          "output_tokens": 30,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 1530,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      },
+      {
+       "timestamp": "2026-09-28T12:40:00.000Z",
+       "type": "event_msg",
+       "ordinal": 3,
+       "payload": {
+        "type": "token_count",
+        "info": {
+         "total_token_usage": {
+          "input_tokens": 7000,
+          "cached_input_tokens": 5600,
+          "output_tokens": 140,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 7140,
+          "cache_write_input_tokens": 0
+         },
+         "last_token_usage": {
+          "input_tokens": 500,
+          "cached_input_tokens": 400,
+          "output_tokens": 10,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 510,
+          "cache_write_input_tokens": 0
+         },
+         "model_context_window": 272000
+        },
+        "rate_limits": {
+         "primary": {
+          "used_percent": 10.0,
+          "window_minutes": 300,
+          "resets_at": 1790000000
+         },
+         "secondary": {
+          "used_percent": 20.0,
+          "window_minutes": 10080,
+          "resets_at": 1790500000
+         }
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "expected": {
+    "2026-09-28": {
+     "gpt-5.5": [
+      7000,
+      5600,
+      140
+     ]
+    }
+   }
+  }
+ ]
+}

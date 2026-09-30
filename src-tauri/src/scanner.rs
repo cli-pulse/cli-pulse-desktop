@@ -406,7 +406,9 @@ fn scan_codex_provider(
     // makes the aggregate exact whatever they did.
     let copies = codex_duplicate_copies(&cache);
     if !copies.is_empty() {
-        log::info!(
+        // Debug, not info: a copy stays on disk, so this would repeat on
+        // every scan.
+        log::debug!(
             "codex: {} file(s) are copies of another tracked rollout and are counted once",
             copies.len()
         );
@@ -466,7 +468,7 @@ pub(crate) fn codex_duplicate_copies(cache: &CostUsageCache) -> HashSet<String> 
     }
 
     fn completeness(e: &FileEntry) -> (i64, i64, i64) {
-        let totals = e.peak_totals.or(e.last_totals).unwrap_or_default();
+        let totals = e.last_totals.unwrap_or_default();
         (e.event_count.unwrap_or(0), totals.input, totals.output)
     }
 
@@ -509,102 +511,102 @@ fn codex_date_from_path(path: &Path, root: &Path) -> Option<String> {
     }
 }
 
-/// Turns Codex's cumulative `total_token_usage` snapshots into per-request
-/// deltas without ever counting the same tokens twice.
+/// Turns a rollout's `token_count` events into the tokens they add, the same
+/// way the macOS app counts them (`CodexTokenAccountant` in CLIPulseCore), so
+/// the two report the same Codex usage from the same logs.
 ///
-/// A rollout's counter normally only grows, and each snapshot minus the
-/// previous one is the request's usage. Two things break that:
+/// Each event carries `total_token_usage`, a cumulative counter, and usually
+/// `last_token_usage`, the request just made. What an event adds is the growth
+/// of the cumulative counter over a baseline: the totals counted so far.
 ///
-/// - **The counter restarts.** It drops to a small value and climbs again from
-///   there; the requests after the drop are real usage.
-/// - **Two counters interleave in one file** (for example several agents
-///   writing to one rollout): the snapshots jump between a high and a low
-///   series.
+/// 1. **The baseline only rises.** A snapshot below it in any component is
+///    skipped and leaves it where it is. Moving the baseline down to it, as
+///    the scanner did before, counts the climb back up a second time: a file
+///    whose counter flips between two series re-counted the gap on every flip.
+/// 2. **A counter carried over is not counted again.** When a file's first
+///    event reports a cumulative total larger than its own request
+///    (`last_token_usage`), the difference was counted before this file
+///    began: by the rollout a fork continues, or by an earlier file of the
+///    same rollout that this one picks up. It becomes the baseline. A fresh
+///    counter's first total equals its first request, so this changes nothing
+///    for it. Without `last_token_usage` the first total counts in full.
 ///
-/// The old rule, `current - previous` with the baseline following every drop,
-/// handles the restart but not the interleaving: each jump back up re-counts
-/// the whole gap between the two series, so the usage is counted again on
-/// every flip. Counting only growth above the highest snapshot seen (a pure
-/// high-water mark) never re-counts, but it drops everything a restarted
-/// counter does until it passes the old peak.
+/// These are the Mac's rules 1 and 3. Its rule 2, which leaves out the events
+/// a sub-agent file copies from its parent before its own `session_meta`, is
+/// not ported: the desktop has no sub-agent rules (see the shared-cases test).
 ///
-/// So each component is counted as:
-/// - at or above the peak: growth above the peak;
-/// - below the peak: growth since the previous snapshot, never negative.
+/// Rule 1 follows the monotonic watermark of CodexBar's `CodexTotalsTracker`
+/// (MIT; see the notice in pricing.rs). Not verbatim: upstream latches an
+/// "interleaved lineage" mode after a drop and then counts the smaller of the
+/// request and the growth; this keeps the plain rule and skips the dropped
+/// event outright, as the Mac does. Its cost: when a counter restarts inside
+/// a file, the requests after the restart are counted only once the total
+/// passes the old high. The Mac and CodexBar make the same choice, and the
+/// shared case `counter_restart_counts_only_above_the_old_high` pins it, so
+/// changing it is a decision for both apps at once.
 ///
-/// A restarted counter keeps being counted, a jump back up to a higher series
-/// cannot re-count the gap, a repeated snapshot counts zero, and no delta is
-/// ever negative. It undercounts in two shapes: a lower series is not counted
-/// on an event that directly follows a higher one, and a restarted counter
-/// that climbs past the old peak loses the part of that one request that lies
-/// below the peak.
-///
-/// What it does not try to recognise is a lower series that replays snapshots
-/// already counted (copied history). A pure high-water mark would drop those,
-/// but only by also dropping every restarted counter, and a restart is the
-/// shape real logs show: after each drop we found, every later snapshot grew
-/// by exactly that request's own `last_token_usage`.
-///
-/// The high-water mark follows CodexBar's `CodexTotalsTracker` (MIT; see the
-/// notice in pricing.rs).
+/// An event with only `last_token_usage` counts as reported and moves the
+/// baseline up by it, so a later cumulative total that includes it does not
+/// count it again. (The Mac leaves its baseline alone here; the two differ
+/// only for a file that mixes events with and without a cumulative total.)
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(crate) struct CodexCounter {
-    /// The previous snapshot.
-    pub prev: Option<CodexTotals>,
-    /// The highest snapshot seen so far, per component.
-    pub peak: Option<CodexTotals>,
+    /// The totals counted so far; `None` before the file's first event.
+    pub baseline: Option<CodexTotals>,
 }
 
 impl CodexCounter {
-    /// A `total_token_usage` snapshot. Returns the tokens it adds.
-    pub fn observe_total(&mut self, current: CodexTotals) -> CodexTotals {
-        let delta = match (self.prev, self.peak.or(self.prev)) {
-            (Some(prev), Some(peak)) => CodexTotals {
-                input: counter_delta(current.input, prev.input, peak.input),
-                cached: counter_delta(current.cached, prev.cached, peak.cached),
-                output: counter_delta(current.output, prev.output, peak.output),
-            },
-            _ => clamp_totals(current),
-        };
-        self.advance_to(current);
-        delta
+    /// A `token_count` event with a `total_token_usage` snapshot and, when
+    /// present, its `last_token_usage`. Returns the tokens it adds.
+    pub fn observe_total(&mut self, total: CodexTotals, last: Option<CodexTotals>) -> CodexTotals {
+        let total = clamp_totals(total);
+        // Rule 2: the file's first event, continuing a counter from elsewhere.
+        if self.baseline.is_none() {
+            if let Some(last) = last {
+                let carried = saturating_sub(total, clamp_totals(last));
+                if !is_zero(&carried) {
+                    self.baseline = Some(carried);
+                }
+            }
+        }
+        // Rule 1: the baseline only rises.
+        match self.baseline {
+            Some(base)
+                if total.input < base.input
+                    || total.cached < base.cached
+                    || total.output < base.output =>
+            {
+                CodexTotals::default()
+            }
+            Some(base) => {
+                self.baseline = Some(total);
+                saturating_sub(total, base)
+            }
+            None => {
+                self.baseline = Some(total);
+                total
+            }
+        }
     }
 
     /// An event with only `last_token_usage` (the request's own usage).
-    /// Counted as is; the snapshot is advanced by it, so a later
-    /// `total_token_usage` that already includes it does not count it again.
     pub fn observe_last(&mut self, last: CodexTotals) -> CodexTotals {
         let delta = clamp_totals(last);
-        let advanced = match self.prev {
-            Some(p) => CodexTotals {
-                input: p.input + delta.input,
-                cached: p.cached + delta.cached,
-                output: p.output + delta.output,
-            },
-            None => delta,
-        };
-        self.advance_to(advanced);
-        delta
-    }
-
-    fn advance_to(&mut self, snapshot: CodexTotals) {
-        self.peak = Some(match self.peak.or(self.prev) {
-            Some(peak) => CodexTotals {
-                input: peak.input.max(snapshot.input),
-                cached: peak.cached.max(snapshot.cached),
-                output: peak.output.max(snapshot.output),
-            },
-            None => snapshot,
+        let base = self.baseline.unwrap_or_default();
+        self.baseline = Some(CodexTotals {
+            input: base.input + delta.input,
+            cached: base.cached + delta.cached,
+            output: base.output + delta.output,
         });
-        self.prev = Some(snapshot);
+        delta
     }
 }
 
-fn counter_delta(current: i64, prev: i64, peak: i64) -> i64 {
-    if current >= peak {
-        current - peak
-    } else {
-        (current - prev).max(0)
+fn saturating_sub(a: CodexTotals, b: CodexTotals) -> CodexTotals {
+    CodexTotals {
+        input: (a.input - b.input).max(0),
+        cached: (a.cached - b.cached).max(0),
+        output: (a.output - b.output).max(0),
     }
 }
 
@@ -653,8 +655,7 @@ impl CodexResume {
         Self {
             model: e.last_model.clone(),
             counter: CodexCounter {
-                prev: e.last_totals,
-                peak: e.peak_totals,
+                baseline: e.last_totals,
             },
             span: EventSpan {
                 first_ms: e.first_event_ms,
@@ -688,9 +689,8 @@ impl CodexParseResult {
             days,
             parsed_bytes: Some(self.parsed_bytes),
             last_model: s.model,
-            last_totals: s.counter.prev,
+            last_totals: s.counter.baseline,
             session_id: s.session_id,
-            peak_totals: s.counter.peak,
             rollout_id: s.rollout_id,
             first_event_ms: s.span.first_ms,
             last_event_ms: s.span.last_ms,
@@ -710,6 +710,33 @@ fn codex_totals(v: &serde_json::Value) -> CodexTotals {
         input: json_i64(v, "input_tokens"),
         cached: json_i64_or(v, &["cached_input_tokens", "cache_read_input_tokens"]),
         output: json_i64(v, "output_tokens"),
+    }
+}
+
+/// Reads the next line of a JSONL log into `buf` and returns how many bytes it
+/// took, terminator included, or `None` when there is no complete line left.
+///
+/// A last line without a newline is returned only when it already parses: a
+/// log's final line written without one. Anything else there is a line the
+/// CLI is still writing. It is left unread and its bytes are not counted, so
+/// the saved offset stays at its first byte and the next scan reads the whole
+/// line once it is complete. Counting it here made the next incremental scan
+/// start in the middle of that line, which never parses, and its usage was
+/// lost for good. Same rule as the macOS app and CodexBar (#2168).
+fn read_jsonl_line<R: BufRead>(reader: &mut R, buf: &mut Vec<u8>) -> Option<usize> {
+    buf.clear();
+    loop {
+        match reader.read_until(b'\n', buf) {
+            Ok(0) if buf.is_empty() => return None,
+            Ok(_) if buf.last() == Some(&b'\n') => return Some(buf.len()),
+            Ok(_) => {
+                let complete =
+                    serde_json::from_slice::<serde::de::IgnoredAny>(buf.trim_ascii_end()).is_ok();
+                return complete.then_some(buf.len());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return None,
+        }
     }
 }
 
@@ -742,15 +769,10 @@ fn parse_codex_file(
     // but doesn't tell us how many bytes were actually consumed. On Windows
     // CRLF JSONLs that under-counted by 1 byte per line, so the cached
     // `parsed_bytes` drifted and the next incremental scan would seek into
-    // the middle of a line. read_until returns the exact byte count
-    // including the terminator, which we strip ourselves.
-    loop {
-        buf.clear();
-        let n = match reader.read_until(b'\n', &mut buf) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(_) => continue,
-        };
+    // the middle of a line. `read_jsonl_line` returns the exact byte count
+    // including the terminator, which we strip ourselves, and leaves a line
+    // that is still being written for the next scan.
+    while let Some(n) = read_jsonl_line(&mut reader, &mut buf) {
         bytes_seen += n as i64;
         while matches!(buf.last(), Some(&b'\n') | Some(&b'\r')) {
             buf.pop();
@@ -832,7 +854,9 @@ fn parse_codex_file(
         // and everything the rollout used before the window would land on the
         // window's first day.
         let delta = if let Some(total) = total {
-            state.counter.observe_total(codex_totals(total))
+            state
+                .counter
+                .observe_total(codex_totals(total), last.map(codex_totals))
         } else if let Some(last) = last {
             state.counter.observe_last(codex_totals(last))
         } else {
@@ -1019,13 +1043,7 @@ fn parse_claude_file(path: &Path, range: &DateRange, start_offset: i64) -> Claud
 
     // CRLF-safe line iteration. See parse_codex_file for why we don't use
     // `reader.lines()`.
-    loop {
-        buf.clear();
-        let n = match reader.read_until(b'\n', &mut buf) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(_) => continue,
-        };
+    while let Some(n) = read_jsonl_line(&mut reader, &mut buf) {
         bytes_seen += n as i64;
         while matches!(buf.last(), Some(&b'\n') | Some(&b'\r')) {
             buf.pop();
@@ -1325,7 +1343,7 @@ mod tests {
         }
     }
 
-    // ---- CodexCounter: cumulative snapshots → per-request deltas ----
+    // ---- CodexCounter: cumulative snapshots → counted tokens ----
 
     fn tot(input: i64, cached: i64, output: i64) -> CodexTotals {
         CodexTotals {
@@ -1335,16 +1353,17 @@ mod tests {
         }
     }
 
-    /// Sum of the input deltas `CodexCounter` produces for these snapshots.
+    /// Sum of the input `CodexCounter` counts for these snapshots (no
+    /// `last_token_usage`).
     fn counted_input(snapshots: &[i64]) -> i64 {
         let mut c = CodexCounter::default();
         snapshots
             .iter()
-            .map(|&i| c.observe_total(tot(i, 0, 0)).input)
+            .map(|&i| c.observe_total(tot(i, 0, 0), None).input)
             .sum()
     }
 
-    /// The rule this replaced: baseline follows every snapshot.
+    /// The pre-1.56 rule: the baseline follows every snapshot.
     fn old_rule_input(snapshots: &[i64]) -> i64 {
         let mut prev: Option<i64> = None;
         let mut sum = 0;
@@ -1355,13 +1374,19 @@ mod tests {
         sum
     }
 
-    /// A pure high-water mark: only growth above the highest snapshot.
-    fn high_water_input(snapshots: &[i64]) -> i64 {
-        let mut peak: Option<i64> = None;
+    /// A restart-aware alternative that neither the macOS app nor CodexBar
+    /// uses: growth above the peak, else growth since the previous snapshot.
+    fn restart_aware_input(snapshots: &[i64]) -> i64 {
+        let (mut prev, mut peak): (Option<i64>, Option<i64>) = (None, None);
         let mut sum = 0;
         for &i in snapshots {
-            sum += peak.map_or(i, |p| (i - p).max(0));
-            peak = Some(peak.map_or(i, |p| p.max(i)));
+            sum += match (prev, peak) {
+                (Some(p), Some(k)) if i < k => (i - p).max(0),
+                (_, Some(k)) => i - k,
+                _ => i,
+            };
+            prev = Some(i);
+            peak = Some(peak.map_or(i, |k| k.max(i)));
         }
         sum
     }
@@ -1369,17 +1394,17 @@ mod tests {
     #[test]
     fn counter_monotone_counts_plain_differences() {
         let mut c = CodexCounter::default();
-        assert_eq!(c.observe_total(tot(100, 0, 10)), tot(100, 0, 10));
-        assert_eq!(c.observe_total(tot(250, 100, 30)), tot(150, 100, 20));
-        assert_eq!(c.observe_total(tot(400, 150, 70)), tot(150, 50, 40));
+        assert_eq!(c.observe_total(tot(100, 0, 10), None), tot(100, 0, 10));
+        assert_eq!(c.observe_total(tot(250, 100, 30), None), tot(150, 100, 20));
+        assert_eq!(c.observe_total(tot(400, 150, 70), None), tot(150, 50, 40));
     }
 
     #[test]
     fn counter_repeated_snapshot_counts_zero() {
         let mut c = CodexCounter::default();
-        c.observe_total(tot(500, 100, 50));
-        assert_eq!(c.observe_total(tot(500, 100, 50)), tot(0, 0, 0));
-        assert_eq!(c.observe_total(tot(500, 100, 50)), tot(0, 0, 0));
+        c.observe_total(tot(500, 100, 50), None);
+        assert_eq!(c.observe_total(tot(500, 100, 50), None), tot(0, 0, 0));
+        assert_eq!(c.observe_total(tot(500, 100, 50), None), tot(0, 0, 0));
     }
 
     #[test]
@@ -1393,75 +1418,121 @@ mod tests {
     }
 
     #[test]
-    fn counter_restart_keeps_counting() {
-        // The counter reaches 2000, restarts at 100 and climbs to 900. The
-        // requests after the restart are real: 300 + 500 more.
+    fn counter_going_down_and_back_counts_the_climb_once() {
+        // 100, 200, then down to 150 and up to 250 and 300: 300 in all.
+        let snapshots = [100, 200, 150, 250, 300];
+        assert_eq!(counted_input(&snapshots), 300);
+        assert_eq!(old_rule_input(&snapshots), 350);
+    }
+
+    #[test]
+    fn counter_restart_counts_only_above_the_old_high() {
+        // The counter reaches 2000, restarts at 100 and climbs to 900: none
+        // of it passes 2000, so nothing after the restart counts. Same as the
+        // macOS app and CodexBar; the undercount is documented on the type.
         let snapshots = [1000, 2000, 100, 400, 900];
-        assert_eq!(counted_input(&snapshots), 2800);
-        // A pure high-water mark would drop all of it.
-        assert_eq!(high_water_input(&snapshots), 2000);
-    }
-
-    #[test]
-    fn counter_restart_passing_the_old_peak_counts_from_the_peak() {
-        // After the restart the counter climbs past the old peak: the request
-        // that crosses it is counted from the peak (the documented undercount),
-        // and growth after that is counted normally.
+        assert_eq!(counted_input(&snapshots), 2000);
+        // Past the old high, growth above it counts again.
         let snapshots = [2000, 100, 1500, 2300, 2600];
-        assert_eq!(counted_input(&snapshots), 2000 + 1400 + 300 + 300);
+        assert_eq!(counted_input(&snapshots), 2000 + 300 + 300);
+        // The restart-aware alternative counts the restarted requests, so
+        // these shapes tell the two apart.
+        assert_eq!(restart_aware_input(&[1000, 2000, 100, 400, 900]), 2800);
+        assert_eq!(
+            restart_aware_input(&[2000, 100, 1500, 2300, 2600]),
+            2000 + 1400 + 300 + 300
+        );
     }
 
     #[test]
-    fn counter_components_are_independent_and_never_negative() {
+    fn counter_skips_a_snapshot_below_the_baseline_in_any_component() {
         let mut c = CodexCounter::default();
-        c.observe_total(tot(1000, 800, 100));
-        // Input and cached drop (restart), output grows past its peak.
-        let d = c.observe_total(tot(50, 20, 130));
-        assert_eq!(d, tot(0, 0, 30));
-        let d = c.observe_total(tot(-5, -5, -5));
-        assert_eq!(d, tot(0, 0, 0));
+        c.observe_total(tot(1000, 800, 100), None);
+        // Input and cached drop, output grows: the whole event is skipped and
+        // the baseline stays where it was.
+        assert_eq!(c.observe_total(tot(50, 20, 130), None), tot(0, 0, 0));
+        assert_eq!(c.baseline, Some(tot(1000, 800, 100)));
+        // The next snapshot above it counts everything since the baseline,
+        // including the output growth the skipped event carried.
+        assert_eq!(
+            c.observe_total(tot(1100, 900, 140), None),
+            tot(100, 100, 40)
+        );
+        // A negative snapshot never counts and never moves the baseline down.
+        assert_eq!(c.observe_total(tot(-5, -5, -5), None), tot(0, 0, 0));
+        assert_eq!(c.baseline, Some(tot(1100, 900, 140)));
+    }
+
+    #[test]
+    fn counter_first_event_carrying_a_counter_counts_only_its_own_request() {
+        // A fork or a continuation file: its first total, 5700, carries the
+        // 5000 counted elsewhere; its own request is the 700 in `last`.
+        let mut c = CodexCounter::default();
+        assert_eq!(
+            c.observe_total(tot(5700, 4500, 340), Some(tot(700, 500, 40))),
+            tot(700, 500, 40)
+        );
+        assert_eq!(
+            c.observe_total(tot(6500, 5100, 380), Some(tot(800, 600, 40))),
+            tot(800, 600, 40)
+        );
+        // A fresh counter's first total equals its request: nothing changes.
+        let mut fresh = CodexCounter::default();
+        assert_eq!(
+            fresh.observe_total(tot(2000, 1600, 100), Some(tot(2000, 1600, 100))),
+            tot(2000, 1600, 100)
+        );
+        // Without `last` there is nothing to tell the carried part from the
+        // request, and the first total counts in full.
+        let mut no_last = CodexCounter::default();
+        assert_eq!(
+            no_last.observe_total(tot(5700, 4500, 340), None),
+            tot(5700, 4500, 340)
+        );
+        // Only the file's first event is checked: later a total above `last`
+        // is the normal case.
+        assert_eq!(
+            no_last.observe_total(tot(6500, 5100, 380), Some(tot(800, 600, 40))),
+            tot(800, 600, 40)
+        );
     }
 
     #[test]
     fn counter_last_only_event_is_not_counted_again_by_a_later_total() {
         let mut c = CodexCounter::default();
-        assert_eq!(c.observe_total(tot(100, 0, 10)), tot(100, 0, 10));
+        assert_eq!(c.observe_total(tot(100, 0, 10), None), tot(100, 0, 10));
         // An event with only last_token_usage (this request: 50 / 5).
         assert_eq!(c.observe_last(tot(50, 0, 5)), tot(50, 0, 5));
         // The next cumulative snapshot already includes those 50 / 5.
-        assert_eq!(c.observe_total(tot(180, 0, 20)), tot(30, 0, 5));
+        assert_eq!(c.observe_total(tot(180, 0, 20), None), tot(30, 0, 5));
     }
 
     #[test]
     fn counter_resumes_from_saved_state_like_a_full_pass() {
         let snapshots = [1000, 100, 1100, 150, 1200];
         let full = counted_input(&snapshots);
-        // Parse the first two, save, resume for the rest.
+        assert_eq!(full, 1200);
+        // Parse the first two, save the baseline, resume for the rest.
         let mut c = CodexCounter::default();
         let first: i64 = snapshots[..2]
             .iter()
-            .map(|&i| c.observe_total(tot(i, 0, 0)).input)
+            .map(|&i| c.observe_total(tot(i, 0, 0), None).input)
             .sum();
         let mut resumed = CodexCounter {
-            prev: c.prev,
-            peak: c.peak,
+            baseline: c.baseline,
         };
         let rest: i64 = snapshots[2..]
             .iter()
-            .map(|&i| resumed.observe_total(tot(i, 0, 0)).input)
+            .map(|&i| resumed.observe_total(tot(i, 0, 0), None).input)
             .sum();
         assert_eq!(first + rest, full);
-        // Resuming without the peak (only the previous snapshot, as the cache
-        // used to store) would re-count the gap.
-        let mut peakless = CodexCounter {
-            prev: c.prev,
-            peak: None,
-        };
-        let rest_peakless: i64 = snapshots[2..]
+        // Resuming without it would count the next snapshot from zero.
+        let mut forgotten = CodexCounter::default();
+        let rest_forgotten: i64 = snapshots[2..]
             .iter()
-            .map(|&i| peakless.observe_total(tot(i, 0, 0)).input)
+            .map(|&i| forgotten.observe_total(tot(i, 0, 0), None).input)
             .sum();
-        assert_ne!(first + rest_peakless, full);
+        assert_ne!(first + rest_forgotten, full);
     }
 
     // ---- codex_duplicate_copies ----
@@ -1472,7 +1543,7 @@ mod tests {
             first_event_ms: Some(first),
             last_event_ms: Some(last),
             event_count: Some(events),
-            peak_totals: Some(tot(final_input, 0, 0)),
+            last_totals: Some(tot(final_input, 0, 0)),
             ..Default::default()
         }
     }

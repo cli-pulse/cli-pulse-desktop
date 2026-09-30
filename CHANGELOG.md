@@ -10,9 +10,9 @@ All notable changes to CLI Pulse Desktop (Windows + Linux).
   ($2.50 / $15 per 1M) that was added before its prices existed; it is now $5 / $30. `gpt-6-astra`,
   `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.6-cyber`, `gpt-5.5-cyber`, `gpt-6-sol`, `gpt-6-luna` and
   `gpt-6.1-sol` had no rates at all and showed no cost; they are priced now, and the `-pro` models gained their
-  long-context tier. The aliases `gpt-5.6`, `gpt-reserve` and the Daybreak names resolve to the model they
-  route to. The table follows the one bundled with steipete/CodexBar (MIT), plus the models OpenAI released
-  after it.
+  long-context tier. The aliases `gpt-5.6`, `gpt-reserve` and the Daybreak names are billed as the model they
+  route to, and still listed under the name Codex logged. The table follows the one bundled with
+  steipete/CodexBar (MIT), plus the models OpenAI released after it.
 - **Codex cost is priced per request.** A request with more than 272K input tokens is billed at the model's
   long-context rates for the whole request, and a repriced model keeps its old rate for requests made before
   the change (Sol before 2026-08-21, Terra and Luna before 2026-07-30). Both need the request, not the day,
@@ -21,12 +21,16 @@ All notable changes to CLI Pulse Desktop (Windows + Linux).
   `archived_sessions/` (and each WSL distro's), and told files apart only by path. A copy with the same
   rollout id whose events overlap in time is now left out; a rollout continued in a second file still counts
   in full, and sub-agent rollouts are unaffected.
-- **A Codex counter that drops can no longer be counted twice.** When a rollout's cumulative token counter
-  jumped back up after a drop, the gap between the two values was counted again. Growth is now counted above
-  the highest value seen, or since the previous value while below it, so a restarted counter still counts
-  and a flip-flopping one cannot double. The counter also advances on events outside the scan window, so a
+- **Codex tokens are counted the way the macOS app counts them.** When a rollout's cumulative token counter
+  jumped back up after a drop, the gap between the two values was counted again; the baseline now only rises,
+  and a snapshot below it is skipped. A rollout file whose counter carries on from an earlier file or from the
+  rollout it forks counted the carried total a second time; its first event now counts only its own request.
+  Both apps run the same shared test cases. The counter also advances on events outside the scan window, so a
   rollout that began before the window no longer puts its earlier usage on the window's first day.
-- The Codex scan cache is rebuilt once after updating (Claude's is kept), so the new rules reach every file.
+- **A log line caught half-written is read once it is complete.** A scan that ran while Codex or Claude Code
+  was writing a line skipped past it, and the rest of the line never parsed, so that request was lost.
+- The Codex scan cache is rebuilt once after updating (Claude's is kept), and again whenever the Codex price
+  table changes, so new rules and prices reach every file.
 
 ## [0.12.0] — 2026-07-14
 

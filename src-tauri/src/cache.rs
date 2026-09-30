@@ -25,9 +25,10 @@
 //! (see scanner.rs and pricing.rs).
 //!
 //! Each provider's cache also records the version of the rules that produced
-//! it (`rules_version`). A cache written under other rules is discarded on
-//! load, so a rules change reaches every file, including files that have not
-//! changed on disk.
+//! it (`rules_version`) and, for Codex, a digest of the price table
+//! (`pricing_fingerprint`). A cache written under other rules or other prices
+//! is discarded on load, so the change reaches every file, including files
+//! that have not changed on disk.
 
 use std::collections::HashMap;
 use std::fs;
@@ -47,13 +48,29 @@ const CACHE_SCHEMA_VERSION: u32 = 1;
 /// Codex history:
 /// - 0: day-level Codex cost, the cumulative baseline followed every drop.
 /// - 1: per-request cost with dated and long-context rates (packed slot 3);
-///   the cumulative counter can no longer re-count a gap; state advances on
-///   out-of-range events too; the rollout id and event span are recorded so
-///   a second copy of a rollout is counted once.
+///   the cumulative baseline only rises (a snapshot below it is skipped) and
+///   a counter carried over from before the file's first event is not
+///   counted again (`scanner::CodexCounter`); state advances on out-of-range
+///   events too; the rollout id and event span are recorded so a second copy
+///   of a rollout is counted once.
+///
+/// Price-table changes do not need a bump: they change
+/// `pricing_fingerprint(provider)`, which is checked as well.
 pub fn rules_version(provider: &str) -> u32 {
     match provider {
         "codex" => 1,
         _ => 0,
+    }
+}
+
+/// Digest of the prices a provider's cached costs were computed with, or
+/// `None` for a provider whose cache does not depend on one. Codex cost is
+/// priced per request while parsing and kept in the cache, so any change to
+/// the Codex table has to rebuild it (`pricing::codex_pricing_fingerprint`).
+pub fn pricing_fingerprint(provider: &str) -> Option<String> {
+    match provider {
+        "codex" => Some(crate::pricing::codex_pricing_fingerprint()),
+        _ => None,
     }
 }
 
@@ -78,15 +95,13 @@ pub struct FileEntry {
     pub parsed_bytes: Option<i64>,
     #[serde(default)]
     pub last_model: Option<String>,
-    /// Codex: the previous cumulative `total_token_usage` snapshot.
+    /// Codex: the cumulative totals counted so far, which the next
+    /// `total_token_usage` snapshot is measured from. It only rises. See
+    /// `scanner::CodexCounter`.
     #[serde(default)]
     pub last_totals: Option<CodexTotals>,
     #[serde(default)]
     pub session_id: Option<String>,
-    /// Codex: the highest cumulative snapshot seen in this file, per
-    /// component. See `scanner::CodexCounter`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub peak_totals: Option<CodexTotals>,
     /// Codex: `session_meta.payload.id`, the id of this rollout. Unlike
     /// `session_id`, which a sub-agent's rollout shares with its parent, this
     /// is the rollout's own. Used only to recognise a second copy of the same
@@ -112,6 +127,9 @@ pub struct CostUsageCache {
     /// caches written before it existed, which read as 0.
     #[serde(default)]
     pub rules_version: u32,
+    /// `pricing_fingerprint(provider)` at the time this cache was built.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing_fingerprint: Option<String>,
     #[serde(default)]
     pub last_scan_unix_ms: i64,
     #[serde(default)]
@@ -132,6 +150,7 @@ impl Default for CostUsageCache {
         Self {
             version: CACHE_SCHEMA_VERSION,
             rules_version: 0,
+            pricing_fingerprint: None,
             last_scan_unix_ms: 0,
             files: HashMap::new(),
             days: HashMap::new(),
@@ -140,15 +159,24 @@ impl Default for CostUsageCache {
 }
 
 impl CostUsageCache {
-    /// An empty cache stamped with `provider`'s current rules. Every fresh
-    /// cache the scanner builds must come from here: one built from
-    /// `Default` would be discarded by the next `load` and re-parsed from
+    /// An empty cache stamped with `provider`'s current rules and prices.
+    /// Every fresh cache the scanner builds must come from here: one built
+    /// from `Default` would be discarded by the next `load` and re-parsed from
     /// scratch on every scan.
     pub fn for_provider(provider: &str) -> Self {
         Self {
             rules_version: rules_version(provider),
+            pricing_fingerprint: pricing_fingerprint(provider),
             ..Self::default()
         }
+    }
+
+    /// Whether this cache was built under `provider`'s current rules and
+    /// prices, so its numbers can be reused.
+    pub fn is_current_for(&self, provider: &str) -> bool {
+        self.version == CACHE_SCHEMA_VERSION
+            && self.rules_version == rules_version(provider)
+            && self.pricing_fingerprint == pricing_fingerprint(provider)
     }
 }
 
@@ -197,14 +225,16 @@ pub fn load(provider: &str, override_dir: Option<&Path>) -> CostUsageCache {
             return fresh();
         }
     };
-    let rules = rules_version(provider);
     match serde_json::from_str::<CostUsageCache>(&text) {
-        Ok(cache) if cache.version == CACHE_SCHEMA_VERSION && cache.rules_version == rules => cache,
+        Ok(cache) if cache.is_current_for(provider) => cache,
         Ok(cache) => {
             log::info!(
-                "cache::load({provider}) written under schema {} / rules {}, current is {CACHE_SCHEMA_VERSION} / {rules}; rebuilding",
+                "cache::load({provider}) written under schema {} / rules {} / prices {:?}, current is {CACHE_SCHEMA_VERSION} / {} / {:?}; rebuilding",
                 cache.version,
                 cache.rules_version,
+                cache.pricing_fingerprint,
+                rules_version(provider),
+                pricing_fingerprint(provider),
             );
             fresh()
         }
@@ -503,14 +533,74 @@ mod tests {
         let claude = load("claude", Some(&tmp));
         assert_eq!(claude.days["2026-04-24"]["m"], vec![1000, 0, 200]);
 
-        // And a Codex cache written under the current rules is kept.
+        // And a Codex cache written under the current rules and prices is kept.
         let mut current = seeded();
         current.rules_version = rules_version("codex");
+        current.pricing_fingerprint = pricing_fingerprint("codex");
         save("codex", &current, Some(&tmp)).unwrap();
         assert_eq!(
             load("codex", Some(&tmp)).days["2026-04-24"]["m"],
             vec![1000, 0, 200]
         );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn codex_cache_priced_with_another_table_is_rebuilt() {
+        // Codex cost is priced while parsing and kept in the cache. A table
+        // change (a new row, a repricing, an alias) must reach requests that
+        // are already cached, with no one having to remember a version bump.
+        let tmp = std::env::temp_dir().join(format!(
+            "cli-pulse-cache-prices-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let seeded = |fingerprint: Option<String>| {
+            let mut cache = CostUsageCache::for_provider("codex");
+            cache.pricing_fingerprint = fingerprint;
+            let mut models = HashMap::new();
+            models.insert("m".to_string(), vec![1000, 0, 200, 42]);
+            cache.days.insert("2026-04-24".to_string(), models);
+            cache
+        };
+
+        let current = pricing_fingerprint("codex");
+        assert!(current.is_some());
+        assert_eq!(
+            CostUsageCache::for_provider("codex").pricing_fingerprint,
+            current
+        );
+
+        for stale in [None, Some("0000000000000000".to_string())] {
+            save("codex", &seeded(stale.clone()), Some(&tmp)).unwrap();
+            let loaded = load("codex", Some(&tmp));
+            assert!(
+                loaded.days.is_empty(),
+                "Codex cache priced with {stale:?} was reused"
+            );
+            assert_eq!(loaded.pricing_fingerprint, current);
+        }
+
+        save("codex", &seeded(current.clone()), Some(&tmp)).unwrap();
+        assert_eq!(
+            load("codex", Some(&tmp)).days["2026-04-24"]["m"],
+            vec![1000, 0, 200, 42]
+        );
+
+        // Claude's cache does not depend on it and never carries one.
+        assert_eq!(pricing_fingerprint("claude"), None);
+        let mut claude = CostUsageCache::for_provider("claude");
+        claude.days.insert(
+            "2026-04-24".to_string(),
+            HashMap::from([("c".to_string(), vec![1])]),
+        );
+        save("claude", &claude, Some(&tmp)).unwrap();
+        assert_eq!(load("claude", Some(&tmp)).days["2026-04-24"]["c"], vec![1]);
 
         std::fs::remove_dir_all(&tmp).ok();
     }
@@ -522,8 +612,10 @@ mod tests {
         let json = r#"{"version":1,"last_scan_unix_ms":5,"files":{"/a.jsonl":{"mtime_unix_ms":1,"size":2,"days":{},"parsed_bytes":2,"last_model":null,"last_totals":null,"session_id":null}},"days":{}}"#;
         let cache: CostUsageCache = serde_json::from_str(json).unwrap();
         assert_eq!(cache.rules_version, 0);
+        assert!(cache.pricing_fingerprint.is_none());
+        assert!(!cache.is_current_for("codex"));
         let entry = &cache.files["/a.jsonl"];
-        assert!(entry.rollout_id.is_none() && entry.peak_totals.is_none());
+        assert!(entry.rollout_id.is_none());
         assert!(entry.first_event_ms.is_none() && entry.event_count.is_none());
     }
 
