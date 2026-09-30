@@ -4,6 +4,28 @@ All notable changes to CLI Pulse Desktop (Windows + Linux).
 
 ## [Unreleased]
 
+### Fixed — Codex cost estimate
+
+- **Codex prices follow OpenAI's published rates.** `gpt-5.5` was priced at the `gpt-5.4` placeholder
+  ($2.50 / $15 per 1M) that was added before its prices existed; it is now $5 / $30. `gpt-6-astra`,
+  `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.6-cyber` and `gpt-5.5-cyber` had no rates at all and
+  showed no cost; they are priced now. The aliases `gpt-5.6`, `gpt-reserve` and the Daybreak names resolve to
+  the model they route to. The table follows the one bundled with steipete/CodexBar (MIT).
+- **Codex cost is priced per request.** A request with more than 272K input tokens is billed at the model's
+  long-context rates for the whole request, and a repriced model keeps its old rate for requests made before
+  the change (Sol before 2026-08-21, Terra and Luna before 2026-07-30). Both need the request, not the day,
+  so Codex cost is now summed per request while parsing, as Claude's already was.
+- **A Codex rollout that exists in two places is counted once.** The scan reads both `sessions/` and
+  `archived_sessions/` (and each WSL distro's), and told files apart only by path. A copy with the same
+  rollout id whose events overlap in time is now left out; a rollout continued in a second file still counts
+  in full, and sub-agent rollouts are unaffected.
+- **A Codex counter that drops can no longer be counted twice.** When a rollout's cumulative token counter
+  jumped back up after a drop, the gap between the two values was counted again. Growth is now counted above
+  the highest value seen, or since the previous value while below it, so a restarted counter still counts
+  and a flip-flopping one cannot double. The counter also advances on events outside the scan window, so a
+  rollout that began before the window no longer puts its earlier usage on the window's first day.
+- The Codex scan cache is rebuilt once after updating (Claude's is kept), so the new rules reach every file.
+
 ## [0.12.0] — 2026-07-14
 
 ### Added — terminal epic (T3)

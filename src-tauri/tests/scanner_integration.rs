@@ -16,6 +16,8 @@
 //!   events (incl. dedup'd streaming chunks)
 //! - Date-range filtering with `today_override` (would have caught the
 //!   v0.2.2 timezone bug)
+//! - Codex cost priced per request (272K long-context tier, dated rates)
+//! - Codex cumulative-counter drops and copies of one rollout in two places
 
 use std::collections::HashMap;
 use std::fs;
@@ -61,6 +63,15 @@ impl TempEnv {
     fn write_codex(&self, year: &str, month: &str, day: &str, name: &str, body: &str) -> PathBuf {
         let dir = self.codex_root.join(year).join(month).join(day);
         fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(name);
+        fs::write(&p, body).unwrap();
+        p
+    }
+
+    /// Write a Codex rollout under `root.join(rel_dir)` (any layout, e.g. an
+    /// `archived_sessions` folder with no date directories).
+    fn write_at(&self, dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
+        fs::create_dir_all(dir).unwrap();
         let p = dir.join(name);
         fs::write(&p, body).unwrap();
         p
@@ -142,7 +153,7 @@ fn codex_three_turns_yields_cumulative_totals() {
 }
 
 #[test]
-fn codex_pricing_applied_to_aggregated_tokens() {
+fn codex_gpt5_cost_is_the_sum_of_request_costs() {
     let env = TempEnv::new("codex_pricing");
     env.write_codex("2026", "04", "25", "s.jsonl", CODEX_THREE_TURNS);
     let today = NaiveDate::from_ymd_opt(2026, 4, 25).unwrap();
@@ -464,4 +475,408 @@ fn codex_event_grouped_by_local_date_in_user_tz() {
         .collect();
     assert_eq!(by_day["2026-04-24"].input_tokens, 100);
     assert_eq!(by_day["2026-04-25"].input_tokens, 200);
+}
+
+// ========================================================================
+// Codex — per-request pricing, dated rates, counter drops, rollout copies
+// ========================================================================
+
+/// `session_meta` line. `id` is the rollout's own id; `session_id` (when
+/// given) is what a sub-agent's rollout carries: its parent's id.
+fn codex_meta(ts: &str, id: &str, session_id: Option<&str>) -> String {
+    match session_id {
+        Some(sid) => format!(
+            r#"{{"type":"session_meta","timestamp":"{ts}","payload":{{"id":"{id}","session_id":"{sid}"}}}}"#
+        ),
+        None => {
+            format!(r#"{{"type":"session_meta","timestamp":"{ts}","payload":{{"id":"{id}"}}}}"#)
+        }
+    }
+}
+
+/// `token_count` line with a cumulative `total_token_usage` snapshot.
+fn codex_total(ts: &str, model: &str, input: i64, cached: i64, output: i64) -> String {
+    format!(
+        r#"{{"type":"event_msg","timestamp":"{ts}","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"cached_input_tokens":{cached},"output_tokens":{output}}},"model":"{model}"}}}}}}"#
+    )
+}
+
+fn lines(ls: &[String]) -> String {
+    let mut body = ls.join("\n");
+    body.push('\n');
+    body
+}
+
+fn codex_sum(entries: &[DailyEntry], model: &str) -> (i64, i64, i64, f64) {
+    entries
+        .iter()
+        .filter(|e| e.provider == "Codex" && e.model == model)
+        .fold((0, 0, 0, 0.0), |(i, c, o, cost), e| {
+            (
+                i + e.input_tokens,
+                c + e.cached_tokens,
+                o + e.output_tokens,
+                cost + e.cost_usd.expect("priced model has a cost"),
+            )
+        })
+}
+
+fn assert_usd(actual: f64, expected: f64) {
+    assert!(
+        (actual - expected).abs() < 1e-6,
+        "expected ${expected}, got ${actual}"
+    );
+}
+
+#[test]
+fn codex_long_context_tier_is_decided_per_request_not_per_day() {
+    // Two gpt-5.5 requests of 200K input each on one day. Each is under the
+    // 272K line, so both are standard: 400K @ $5/M = $2.00. Pricing the day's
+    // 400K total would cross the line and bill all of it at $10/M = $4.00.
+    let env = TempEnv::new("codex_per_request");
+    env.write_codex(
+        "2026",
+        "09",
+        "10",
+        "r.jsonl",
+        &lines(&[
+            codex_total("2026-09-10T12:00:00Z", "gpt-5.5", 200_000, 0, 0),
+            codex_total("2026-09-10T12:05:00Z", "gpt-5.5", 400_000, 0, 0),
+        ]),
+    );
+    let today = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+    let result = scanner::scan_with_options(env.options(1, Some(today))).unwrap();
+    let (input, _, _, cost) = codex_sum(&result.entries, "gpt-5.5");
+    assert_eq!(input, 400_000);
+    assert_usd(cost, 2.00);
+}
+
+#[test]
+fn codex_long_context_request_bills_the_whole_request_higher() {
+    // One gpt-6-astra request of 300K input and 1K output: over the line, so
+    // 300K @ $20/M + 1K @ $75/M = $6.075.
+    let env = TempEnv::new("codex_long_context");
+    env.write_codex(
+        "2026",
+        "09",
+        "10",
+        "r.jsonl",
+        &lines(&[codex_total(
+            "2026-09-10T12:00:00Z",
+            "gpt-6-astra",
+            300_000,
+            0,
+            1_000,
+        )]),
+    );
+    let today = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+    let result = scanner::scan_with_options(env.options(1, Some(today))).unwrap();
+    assert_usd(codex_sum(&result.entries, "gpt-6-astra").3, 6.075);
+}
+
+#[test]
+fn codex_rates_follow_the_request_time() {
+    // gpt-5.6-sol was repriced from $5/M to $4/M input on 2026-08-21. One
+    // 100K request the day before and one the day after: $0.50 + $0.40.
+    // The model is logged as the alias `gpt-5.6`, which is Sol.
+    let env = TempEnv::new("codex_dated");
+    env.write_at(
+        &env.codex_root,
+        "r.jsonl",
+        &lines(&[
+            codex_total("2026-08-20T12:00:00Z", "gpt-5.6", 100_000, 0, 0),
+            codex_total("2026-08-22T12:00:00Z", "gpt-5.6", 200_000, 0, 0),
+        ]),
+    );
+    let today = NaiveDate::from_ymd_opt(2026, 8, 22).unwrap();
+    let result = scanner::scan_with_options(env.options(7, Some(today))).unwrap();
+    let (input, _, _, cost) = codex_sum(&result.entries, "gpt-5.6-sol");
+    assert_eq!(input, 200_000);
+    assert_usd(cost, 0.90);
+    assert!(
+        result.entries.iter().all(|e| e.model != "gpt-5.6"),
+        "the alias should be reported under the model it resolves to"
+    );
+}
+
+#[test]
+fn codex_unpriced_model_has_no_cost_and_zero_priced_model_has_zero() {
+    let env = TempEnv::new("codex_unpriced");
+    env.write_codex(
+        "2026",
+        "09",
+        "10",
+        "a.jsonl",
+        &lines(&[codex_total(
+            "2026-09-10T12:00:00Z",
+            "gpt-42-unicorn",
+            1_000,
+            0,
+            10,
+        )]),
+    );
+    env.write_codex(
+        "2026",
+        "09",
+        "10",
+        "b.jsonl",
+        &lines(&[codex_total(
+            "2026-09-10T12:00:00Z",
+            "gpt-5.3-codex-spark",
+            1_000,
+            0,
+            10,
+        )]),
+    );
+    let today = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+    let result = scanner::scan_with_options(env.options(1, Some(today))).unwrap();
+    assert_eq!(
+        pick(&result.entries, "2026-09-10", "Codex", "gpt-42-unicorn").cost_usd,
+        None
+    );
+    assert_eq!(
+        pick(
+            &result.entries,
+            "2026-09-10",
+            "Codex",
+            "gpt-5.3-codex-spark"
+        )
+        .cost_usd,
+        Some(0.0)
+    );
+}
+
+#[test]
+fn codex_counter_jumping_between_two_series_is_not_recounted() {
+    // Two cumulative series interleaved in one rollout. The old rule counted
+    // 1000 + 1000 + 1090 + 1180 = 4270 here; the tokens are 1300.
+    let env = TempEnv::new("codex_interleaved");
+    let snaps = [1000, 100, 1100, 110, 1200, 120, 1300, 130];
+    let body: Vec<String> = snaps
+        .iter()
+        .enumerate()
+        .map(|(i, &n)| codex_total(&format!("2026-09-10T12:{i:02}:00Z"), "gpt-5.5", n, 0, 0))
+        .collect();
+    env.write_codex("2026", "09", "10", "r.jsonl", &lines(&body));
+    let today = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+    let result = scanner::scan_with_options(env.options(1, Some(today))).unwrap();
+    assert_eq!(codex_sum(&result.entries, "gpt-5.5").0, 1300);
+}
+
+#[test]
+fn codex_counter_restart_keeps_counting() {
+    // The counter reaches 2000, restarts and climbs to 900: 2000 + 300 + 500.
+    let env = TempEnv::new("codex_restart");
+    let snaps = [1000, 2000, 100, 400, 900];
+    let body: Vec<String> = snaps
+        .iter()
+        .enumerate()
+        .map(|(i, &n)| codex_total(&format!("2026-09-10T12:{i:02}:00Z"), "gpt-5.5", n, 0, 0))
+        .collect();
+    env.write_codex("2026", "09", "10", "r.jsonl", &lines(&body));
+    let today = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+    let result = scanner::scan_with_options(env.options(1, Some(today))).unwrap();
+    assert_eq!(codex_sum(&result.entries, "gpt-5.5").0, 2800);
+}
+
+#[test]
+fn codex_usage_before_the_window_is_not_put_on_its_first_day() {
+    // A rollout that started before the window: 5000 input on 09-07, then
+    // one more request of 600 on 09-10. A 1-day window (09-09..09-10) holds
+    // 600, not the 5600 the rollout used since it started.
+    let env = TempEnv::new("codex_straddle");
+    env.write_at(
+        &env.codex_root,
+        "r.jsonl",
+        &lines(&[
+            codex_total("2026-09-07T12:00:00Z", "gpt-5.5", 5_000, 0, 0),
+            codex_total("2026-09-10T12:00:00Z", "gpt-5.5", 5_600, 0, 0),
+        ]),
+    );
+    let today = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+    let result = scanner::scan_with_options(env.options(1, Some(today))).unwrap();
+    assert_eq!(codex_sum(&result.entries, "gpt-5.5").0, 600);
+}
+
+const ROLLOUT_NAME: &str = "rollout-2026-09-10T12-00-00-11111111-2222-3333-4444-555555555555.jsonl";
+
+fn one_rollout(id: &str, session_id: Option<&str>, minute0: u32, snaps: &[i64]) -> String {
+    let mut ls = vec![codex_meta(
+        &format!("2026-09-10T12:{minute0:02}:00Z"),
+        id,
+        session_id,
+    )];
+    for (i, &n) in snaps.iter().enumerate() {
+        ls.push(codex_total(
+            &format!("2026-09-10T12:{:02}:30Z", minute0 as usize + i),
+            "gpt-5.5",
+            n,
+            n / 2,
+            n / 10,
+        ));
+    }
+    lines(&ls)
+}
+
+#[test]
+fn codex_rollout_in_both_sessions_and_archive_is_counted_once() {
+    let env = TempEnv::new("codex_archived_copy");
+    let body = one_rollout("rollout-a", None, 0, &[1_000, 3_000, 6_000]);
+    env.write_codex("2026", "09", "10", ROLLOUT_NAME, &body);
+    let archived = env.root.join("archived_sessions");
+    env.write_at(&archived, ROLLOUT_NAME, &body);
+
+    let today = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+    let mut opts = env.options(1, Some(today));
+    opts.codex_roots_override = Some(vec![env.codex_root.clone(), archived]);
+    let result = scanner::scan_with_options(opts).unwrap();
+
+    let (input, cached, output, cost) = codex_sum(&result.entries, "gpt-5.5");
+    assert_eq!((input, cached, output), (6_000, 3_000, 600));
+    // 3000 uncached @ $5/M + 3000 cached @ $0.50/M + 600 output @ $30/M.
+    assert_usd(cost, 0.015 + 0.0015 + 0.018);
+    // The per-origin split agrees with the totals: one file, 6000 + 600.
+    let native: Vec<_> = result
+        .origin_usage
+        .iter()
+        .filter(|o| o.kind == "native")
+        .collect();
+    assert_eq!(native.len(), 1);
+    assert_eq!((native[0].tokens, native[0].files), (6_600, 1));
+}
+
+#[test]
+fn codex_stale_copy_loses_to_the_full_rollout() {
+    // The archive holds a copy taken part-way through; the live file went on.
+    let env = TempEnv::new("codex_stale_copy");
+    env.write_codex(
+        "2026",
+        "09",
+        "10",
+        ROLLOUT_NAME,
+        &one_rollout("rollout-a", None, 0, &[1_000, 3_000, 6_000]),
+    );
+    let archived = env.root.join("archived_sessions");
+    env.write_at(
+        &archived,
+        ROLLOUT_NAME,
+        &one_rollout("rollout-a", None, 0, &[1_000, 3_000]),
+    );
+    let today = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+    let mut opts = env.options(1, Some(today));
+    opts.codex_roots_override = Some(vec![env.codex_root.clone(), archived]);
+    let result = scanner::scan_with_options(opts).unwrap();
+    assert_eq!(codex_sum(&result.entries, "gpt-5.5").0, 6_000);
+}
+
+#[test]
+fn codex_rollout_continued_in_a_second_file_counts_both_halves() {
+    // Same rollout id, but the second file starts after the first one ends
+    // and shares no event with it: both are real usage.
+    let env = TempEnv::new("codex_continuation");
+    env.write_codex(
+        "2026",
+        "09",
+        "10",
+        "rollout-first.jsonl",
+        &one_rollout("rollout-a", None, 0, &[1_000, 2_000]),
+    );
+    env.write_codex(
+        "2026",
+        "09",
+        "10",
+        "rollout-second.jsonl",
+        &one_rollout("rollout-a", None, 30, &[500, 1_500]),
+    );
+    let today = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+    let result = scanner::scan_with_options(env.options(1, Some(today))).unwrap();
+    assert_eq!(codex_sum(&result.entries, "gpt-5.5").0, 3_500);
+}
+
+#[test]
+fn codex_sub_agent_rollouts_are_all_counted() {
+    // A parent and two sub-agents running at the same time. The sub-agents'
+    // session_id is the parent's, but each has its own rollout id.
+    let env = TempEnv::new("codex_subagents");
+    env.write_codex(
+        "2026",
+        "09",
+        "10",
+        "rollout-parent.jsonl",
+        &one_rollout("parent", None, 0, &[1_000, 4_000]),
+    );
+    env.write_codex(
+        "2026",
+        "09",
+        "10",
+        "rollout-sub1.jsonl",
+        &one_rollout("sub-1", Some("parent"), 0, &[700]),
+    );
+    env.write_codex(
+        "2026",
+        "09",
+        "10",
+        "rollout-sub2.jsonl",
+        &one_rollout("sub-2", Some("parent"), 1, &[300]),
+    );
+    let today = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+    let result = scanner::scan_with_options(env.options(1, Some(today))).unwrap();
+    assert_eq!(codex_sum(&result.entries, "gpt-5.5").0, 5_000);
+}
+
+#[test]
+fn codex_warm_scan_reuses_the_cache() {
+    // A cache saved without the current rules version would be thrown away on
+    // every load, silently re-parsing every file on every scan.
+    let env = TempEnv::new("codex_warm");
+    env.write_codex(
+        "2026",
+        "09",
+        "10",
+        "r.jsonl",
+        &one_rollout("rollout-a", None, 0, &[1_000, 3_000]),
+    );
+    let today = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+    let mut opts = env.options(1, Some(today));
+    opts.force_rescan = false;
+    let cold = scanner::scan_with_options(opts.clone()).unwrap();
+    let warm = scanner::scan_with_options(opts).unwrap();
+    assert_eq!(warm.files_scanned, 0, "warm scan re-parsed the Codex file");
+    assert_eq!(warm.files_cached, 1);
+    assert_eq!(
+        codex_sum(&cold.entries, "gpt-5.5"),
+        codex_sum(&warm.entries, "gpt-5.5")
+    );
+}
+
+#[test]
+fn codex_incremental_scan_matches_a_full_rescan_across_a_counter_drop() {
+    // First scan sees the high series and a drop; the appended snapshot
+    // returns to the high series. Resuming must remember the peak, or the
+    // jump back up re-counts the gap (1100 - 100 = 1000 instead of 100).
+    let env = TempEnv::new("codex_incremental_drop");
+    let today = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+    let head = vec![
+        codex_meta("2026-09-10T12:00:00Z", "rollout-a", None),
+        codex_total("2026-09-10T12:01:00Z", "gpt-5.5", 1_000, 0, 0),
+        codex_total("2026-09-10T12:02:00Z", "gpt-5.5", 100, 0, 0),
+    ];
+    env.write_codex("2026", "09", "10", "r.jsonl", &lines(&head));
+    let mut warm = env.options(1, Some(today));
+    warm.force_rescan = false;
+    let first = scanner::scan_with_options(warm.clone()).unwrap();
+    assert_eq!(codex_sum(&first.entries, "gpt-5.5").0, 1_000);
+
+    let mut all = head;
+    all.push(codex_total("2026-09-10T12:03:00Z", "gpt-5.5", 1_100, 0, 0));
+    env.write_codex("2026", "09", "10", "r.jsonl", &lines(&all));
+    let incremental = scanner::scan_with_options(warm).unwrap();
+    assert_eq!(incremental.files_scanned, 1);
+    let full = scanner::scan_with_options(env.options(1, Some(today))).unwrap();
+
+    assert_eq!(codex_sum(&incremental.entries, "gpt-5.5").0, 1_100);
+    assert_eq!(
+        codex_sum(&incremental.entries, "gpt-5.5"),
+        codex_sum(&full.entries, "gpt-5.5")
+    );
 }

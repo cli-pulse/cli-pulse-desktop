@@ -11,14 +11,16 @@
 //! upload is paused in v0.2.14 and returns in v0.3.1 via a multi-device
 //! aware path.
 //!
-//! Claude cost invariant:
-//! The server, Swift, Kotlin and Rust implementations all sum per-message
-//! cost. NEVER compute cost from day-aggregated tokens — sonnet-4-5 and
-//! sonnet-4-6 have a 200K-token tier threshold that gets wrongly crossed
-//! once you aggregate. Per-message cost is accumulated into packed
-//! slot [4] (`cost_nanos`, scaled by 1e9) during parse.
+//! Cost invariant (both providers):
+//! Cost is the sum of per-request costs. NEVER compute cost from
+//! day-aggregated tokens: Claude sonnet-4-5 / sonnet-4-6 have a 200K-token
+//! tier and several Codex models a 272K long-context tier, and a day's total
+//! crosses them when no single request does. Codex rates also depend on the
+//! request's date (a repriced model keeps its old rate for older requests).
+//! Per-request cost is accumulated during parse into `cost_nanos` (scaled by
+//! 1e9): Claude packed slot [4], Codex packed slot [3].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -34,7 +36,8 @@ use crate::pricing;
 use crate::wsl::{classify_origin, Origin};
 
 pub const CLAUDE_MSG_BUCKET_MODEL: &str = "__claude_msg__";
-const CLAUDE_COST_SCALE: f64 = 1_000_000_000.0;
+/// `cost_nanos` units per USD.
+const COST_SCALE: f64 = 1_000_000_000.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DailyEntry {
@@ -202,12 +205,19 @@ fn origin_usage(
 ) -> Vec<OriginUsage> {
     // key: (kind, distro) -> (tokens, files). I/O slots per provider: Codex
     // input=0/output=2; Claude input=0/output=3 (cached + cost + msgs excluded).
+    // A second copy of a Codex rollout is left out here exactly as it is left
+    // out of the totals, so the split still adds up to them.
+    let codex_copies = codex_duplicate_copies(codex_cache);
+    let no_copies = HashSet::new();
     let mut acc: HashMap<(String, Option<String>), (i64, u32)> = HashMap::new();
-    for (cache, io_slots) in [
-        (codex_cache, [0usize, 2usize].as_slice()),
-        (claude_cache, [0usize, 3usize].as_slice()),
+    for (cache, io_slots, skip) in [
+        (codex_cache, [0usize, 2usize].as_slice(), &codex_copies),
+        (claude_cache, [0usize, 3usize].as_slice(), &no_copies),
     ] {
         for (path, entry) in &cache.files {
+            if skip.contains(path) {
+                continue;
+            }
             let tokens = sum_file_tokens(entry, io_slots, range);
             if tokens == 0 {
                 continue;
@@ -301,7 +311,7 @@ fn scan_codex_provider(
     range: &DateRange,
 ) -> anyhow::Result<(CostUsageCache, u32, u32)> {
     let mut cache = if opts.force_rescan {
-        CostUsageCache::default()
+        CostUsageCache::for_provider("codex")
     } else {
         cache::load("codex", opts.cache_dir.as_deref())
     };
@@ -346,54 +356,29 @@ fn scan_codex_provider(
                     continue;
                 }
                 FileAction::Incremental { start_offset } => {
-                    let (initial_model, initial_totals) = cache
-                        .files
-                        .get(&key)
-                        .map(|e| (e.last_model.clone(), e.last_totals))
-                        .unwrap_or((None, None));
-                    let parsed =
-                        parse_codex_file(p, range, start_offset, initial_model, initial_totals);
+                    let previous = cache.files.get(&key);
+                    let resume = previous.map(CodexResume::from_entry).unwrap_or_default();
+                    let mut merged_days = previous.map(|e| e.days.clone()).unwrap_or_default();
+                    let parsed = parse_codex_file(p, range, start_offset, resume);
                     if !parsed.file_days.is_empty() {
                         cache::apply_file_days(&mut cache, &parsed.file_days, 1);
                     }
-                    let mut merged_days = cache
-                        .files
-                        .get(&key)
-                        .map(|e| e.days.clone())
-                        .unwrap_or_default();
                     cache::merge_file_days(&mut merged_days, &parsed.file_days);
-                    cache.files.insert(
-                        key.clone(),
-                        FileEntry {
-                            mtime_unix_ms: mtime,
-                            size,
-                            days: merged_days,
-                            parsed_bytes: Some(parsed.parsed_bytes),
-                            last_model: parsed.last_model,
-                            last_totals: parsed.last_totals,
-                            session_id: parsed.session_id,
-                        },
-                    );
+                    cache
+                        .files
+                        .insert(key.clone(), parsed.into_entry(mtime, size, merged_days));
                     files_scanned += 1;
                 }
                 FileAction::FullReparse => {
                     if let Some(old) = cache.files.get(&key).cloned() {
                         cache::apply_file_days(&mut cache, &old.days, -1);
                     }
-                    let parsed = parse_codex_file(p, range, 0, None, None);
+                    let mut parsed = parse_codex_file(p, range, 0, CodexResume::default());
                     cache::apply_file_days(&mut cache, &parsed.file_days, 1);
-                    cache.files.insert(
-                        key.clone(),
-                        FileEntry {
-                            mtime_unix_ms: mtime,
-                            size,
-                            days: parsed.file_days,
-                            parsed_bytes: Some(parsed.parsed_bytes),
-                            last_model: parsed.last_model,
-                            last_totals: parsed.last_totals,
-                            session_id: parsed.session_id,
-                        },
-                    );
+                    let days = std::mem::take(&mut parsed.file_days);
+                    cache
+                        .files
+                        .insert(key.clone(), parsed.into_entry(mtime, size, days));
                     files_scanned += 1;
                 }
             }
@@ -414,11 +399,100 @@ fn scan_codex_provider(
     }
 
     cache::prune_days(&mut cache, &range.since_key, &range.until_key);
+
+    // The aggregate is rebuilt from the files that count, so a second copy of
+    // a rollout (see `codex_duplicate_copies`) never reaches it. The running
+    // additions above keep the per-file bookkeeping uniform with Claude's; this
+    // makes the aggregate exact whatever they did.
+    let copies = codex_duplicate_copies(&cache);
+    if !copies.is_empty() {
+        log::info!(
+            "codex: {} file(s) are copies of another tracked rollout and are counted once",
+            copies.len()
+        );
+    }
+    rebuild_days_from_files(&mut cache, &copies);
+
     cache.last_scan_unix_ms = now_unix_ms();
     if let Err(e) = cache::save("codex", &cache, opts.cache_dir.as_deref()) {
         log::warn!("cache::save(codex) failed: {e}");
     }
     Ok((cache, files_scanned, files_cached))
+}
+
+/// Replace the aggregate `cache.days` with the sum of every tracked file's own
+/// days, leaving out the paths in `skip`.
+fn rebuild_days_from_files(cache: &mut CostUsageCache, skip: &HashSet<String>) {
+    let mut days: HashMap<String, HashMap<String, Packed>> = HashMap::new();
+    for (path, entry) in &cache.files {
+        if skip.contains(path) {
+            continue;
+        }
+        cache::merge_file_days(&mut days, &entry.days);
+    }
+    cache.days = days;
+}
+
+/// Paths of Codex rollout files that are a second copy of another tracked
+/// file, and so must not be counted.
+///
+/// Codex moves a finished rollout from `sessions/` to `archived_sessions/`, and
+/// the scan walks both (and each WSL distro's `~/.codex`). A move is harmless,
+/// but a rollout that exists in two places at once (copied instead of moved, a
+/// restored or synced folder, a WSL home linked to the Windows one) would be
+/// counted twice, because files are otherwise told apart only by path.
+///
+/// Two files are copies of one rollout when they carry the same rollout id
+/// (`session_meta.payload.id`) AND their token events overlap in time. The id
+/// alone is not enough: an editor can start a rollout in one file and continue
+/// it in another under the same id, with no event in common, and both halves
+/// are real usage. Files with no token events are never copies of anything.
+///
+/// Among overlapping copies the most complete one is kept: most token events,
+/// then the larger final totals, then the first path in sort order.
+///
+/// Sub-agent rollouts are not affected: each has its own rollout id (their
+/// `session_id` is the parent's, which is why this does not use it).
+pub(crate) fn codex_duplicate_copies(cache: &CostUsageCache) -> HashSet<String> {
+    let mut by_rollout: HashMap<&str, Vec<(&String, &FileEntry)>> = HashMap::new();
+    for (path, entry) in &cache.files {
+        if let (Some(id), Some(_), Some(_)) = (
+            entry.rollout_id.as_deref(),
+            entry.first_event_ms,
+            entry.last_event_ms,
+        ) {
+            by_rollout.entry(id).or_default().push((path, entry));
+        }
+    }
+
+    fn completeness(e: &FileEntry) -> (i64, i64, i64) {
+        let totals = e.peak_totals.or(e.last_totals).unwrap_or_default();
+        (e.event_count.unwrap_or(0), totals.input, totals.output)
+    }
+
+    let mut copies = HashSet::new();
+    for (_, mut files) in by_rollout {
+        if files.len() < 2 {
+            continue;
+        }
+        files.sort_by(|(a_path, a), (b_path, b)| {
+            completeness(b)
+                .cmp(&completeness(a))
+                .then_with(|| a_path.cmp(b_path))
+        });
+        let mut kept: Vec<(i64, i64)> = Vec::new();
+        for (path, entry) in files {
+            let (Some(start), Some(end)) = (entry.first_event_ms, entry.last_event_ms) else {
+                continue;
+            };
+            if kept.iter().any(|&(s, e)| start <= e && s <= end) {
+                copies.insert(path.clone());
+            } else {
+                kept.push((start, end));
+            }
+        }
+    }
+    copies
 }
 
 fn codex_date_from_path(path: &Path, root: &Path) -> Option<String> {
@@ -435,27 +509,220 @@ fn codex_date_from_path(path: &Path, root: &Path) -> Option<String> {
     }
 }
 
+/// Turns Codex's cumulative `total_token_usage` snapshots into per-request
+/// deltas without ever counting the same tokens twice.
+///
+/// A rollout's counter normally only grows, and each snapshot minus the
+/// previous one is the request's usage. Two things break that:
+///
+/// - **The counter restarts.** It drops to a small value and climbs again from
+///   there; the requests after the drop are real usage.
+/// - **Two counters interleave in one file** (for example several agents
+///   writing to one rollout): the snapshots jump between a high and a low
+///   series.
+///
+/// The old rule, `current - previous` with the baseline following every drop,
+/// handles the restart but not the interleaving: each jump back up re-counts
+/// the whole gap between the two series, so the usage is counted again on
+/// every flip. Counting only growth above the highest snapshot seen (a pure
+/// high-water mark) never re-counts, but it drops everything a restarted
+/// counter does until it passes the old peak.
+///
+/// So each component is counted as:
+/// - at or above the peak: growth above the peak;
+/// - below the peak: growth since the previous snapshot, never negative.
+///
+/// A restarted counter keeps being counted, a jump back up to a higher series
+/// cannot re-count the gap, a repeated snapshot counts zero, and no delta is
+/// ever negative. It undercounts in two shapes: a lower series is not counted
+/// on an event that directly follows a higher one, and a restarted counter
+/// that climbs past the old peak loses the part of that one request that lies
+/// below the peak.
+///
+/// What it does not try to recognise is a lower series that replays snapshots
+/// already counted (copied history). A pure high-water mark would drop those,
+/// but only by also dropping every restarted counter, and a restart is the
+/// shape real logs show: after each drop we found, every later snapshot grew
+/// by exactly that request's own `last_token_usage`.
+///
+/// The high-water mark follows CodexBar's `CodexTotalsTracker` (MIT; see the
+/// notice in pricing.rs).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct CodexCounter {
+    /// The previous snapshot.
+    pub prev: Option<CodexTotals>,
+    /// The highest snapshot seen so far, per component.
+    pub peak: Option<CodexTotals>,
+}
+
+impl CodexCounter {
+    /// A `total_token_usage` snapshot. Returns the tokens it adds.
+    pub fn observe_total(&mut self, current: CodexTotals) -> CodexTotals {
+        let delta = match (self.prev, self.peak.or(self.prev)) {
+            (Some(prev), Some(peak)) => CodexTotals {
+                input: counter_delta(current.input, prev.input, peak.input),
+                cached: counter_delta(current.cached, prev.cached, peak.cached),
+                output: counter_delta(current.output, prev.output, peak.output),
+            },
+            _ => clamp_totals(current),
+        };
+        self.advance_to(current);
+        delta
+    }
+
+    /// An event with only `last_token_usage` (the request's own usage).
+    /// Counted as is; the snapshot is advanced by it, so a later
+    /// `total_token_usage` that already includes it does not count it again.
+    pub fn observe_last(&mut self, last: CodexTotals) -> CodexTotals {
+        let delta = clamp_totals(last);
+        let advanced = match self.prev {
+            Some(p) => CodexTotals {
+                input: p.input + delta.input,
+                cached: p.cached + delta.cached,
+                output: p.output + delta.output,
+            },
+            None => delta,
+        };
+        self.advance_to(advanced);
+        delta
+    }
+
+    fn advance_to(&mut self, snapshot: CodexTotals) {
+        self.peak = Some(match self.peak.or(self.prev) {
+            Some(peak) => CodexTotals {
+                input: peak.input.max(snapshot.input),
+                cached: peak.cached.max(snapshot.cached),
+                output: peak.output.max(snapshot.output),
+            },
+            None => snapshot,
+        });
+        self.prev = Some(snapshot);
+    }
+}
+
+fn counter_delta(current: i64, prev: i64, peak: i64) -> i64 {
+    if current >= peak {
+        current - peak
+    } else {
+        (current - prev).max(0)
+    }
+}
+
+fn clamp_totals(t: CodexTotals) -> CodexTotals {
+    CodexTotals {
+        input: t.input.max(0),
+        cached: t.cached.max(0),
+        output: t.output.max(0),
+    }
+}
+
+fn is_zero(t: &CodexTotals) -> bool {
+    t.input == 0 && t.cached == 0 && t.output == 0
+}
+
+/// First and last token-event time of a whole file, and how many there were.
+#[derive(Debug, Clone, Copy, Default)]
+struct EventSpan {
+    first_ms: Option<i64>,
+    last_ms: Option<i64>,
+    count: i64,
+}
+
+impl EventSpan {
+    fn observe(&mut self, at_ms: Option<i64>) {
+        self.count += 1;
+        if let Some(t) = at_ms {
+            self.first_ms = Some(self.first_ms.map_or(t, |f| f.min(t)));
+            self.last_ms = Some(self.last_ms.map_or(t, |l| l.max(t)));
+        }
+    }
+}
+
+/// What a parse carries over from the part of a file already parsed.
+#[derive(Debug, Clone, Default)]
+struct CodexResume {
+    model: Option<String>,
+    counter: CodexCounter,
+    span: EventSpan,
+    session_id: Option<String>,
+    rollout_id: Option<String>,
+}
+
+impl CodexResume {
+    fn from_entry(e: &FileEntry) -> Self {
+        Self {
+            model: e.last_model.clone(),
+            counter: CodexCounter {
+                prev: e.last_totals,
+                peak: e.peak_totals,
+            },
+            span: EventSpan {
+                first_ms: e.first_event_ms,
+                last_ms: e.last_event_ms,
+                count: e.event_count.unwrap_or(0),
+            },
+            session_id: e.session_id.clone(),
+            rollout_id: e.rollout_id.clone(),
+        }
+    }
+}
+
 struct CodexParseResult {
     parsed_bytes: i64,
     file_days: HashMap<String, HashMap<String, Packed>>,
-    last_model: Option<String>,
-    last_totals: Option<CodexTotals>,
-    session_id: Option<String>,
+    /// State at the end of the parse, including what was resumed from.
+    state: CodexResume,
+}
+
+impl CodexParseResult {
+    fn into_entry(
+        self,
+        mtime_unix_ms: i64,
+        size: i64,
+        days: HashMap<String, HashMap<String, Packed>>,
+    ) -> FileEntry {
+        let s = self.state;
+        FileEntry {
+            mtime_unix_ms,
+            size,
+            days,
+            parsed_bytes: Some(self.parsed_bytes),
+            last_model: s.model,
+            last_totals: s.counter.prev,
+            session_id: s.session_id,
+            peak_totals: s.counter.peak,
+            rollout_id: s.rollout_id,
+            first_event_ms: s.span.first_ms,
+            last_event_ms: s.span.last_ms,
+            event_count: Some(s.span.count),
+        }
+    }
+}
+
+fn parse_unix_ms(ts: &str) -> Option<i64> {
+    DateTime::parse_from_rfc3339(ts)
+        .ok()
+        .map(|d| d.timestamp_millis())
+}
+
+fn codex_totals(v: &serde_json::Value) -> CodexTotals {
+    CodexTotals {
+        input: json_i64(v, "input_tokens"),
+        cached: json_i64_or(v, &["cached_input_tokens", "cache_read_input_tokens"]),
+        output: json_i64(v, "output_tokens"),
+    }
 }
 
 fn parse_codex_file(
     path: &Path,
     range: &DateRange,
     start_offset: i64,
-    initial_model: Option<String>,
-    initial_totals: Option<CodexTotals>,
+    resume: CodexResume,
 ) -> CodexParseResult {
     let mut out = CodexParseResult {
         parsed_bytes: start_offset,
         file_days: HashMap::new(),
-        last_model: initial_model.clone(),
-        last_totals: initial_totals,
-        session_id: None,
+        state: resume,
     };
 
     let mut file = match File::open(path) {
@@ -467,9 +734,7 @@ fn parse_codex_file(
     }
     let mut reader = BufReader::with_capacity(256 * 1024, file);
 
-    let mut current_model = initial_model;
-    let mut prev_total = initial_totals.unwrap_or_default();
-    let mut has_prev = initial_totals.is_some();
+    let state = &mut out.state;
     let mut bytes_seen: i64 = 0;
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
 
@@ -510,14 +775,17 @@ fn parse_codex_file(
         let ty = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
         if ty == "session_meta" {
-            if out.session_id.is_none() {
-                if let Some(payload) = obj.get("payload") {
-                    out.session_id = payload
+            if let Some(payload) = obj.get("payload") {
+                if state.session_id.is_none() {
+                    state.session_id = payload
                         .get("session_id")
                         .and_then(|v| v.as_str())
                         .or_else(|| payload.get("sessionId").and_then(|v| v.as_str()))
                         .or_else(|| payload.get("id").and_then(|v| v.as_str()))
                         .map(String::from);
+                }
+                if state.rollout_id.is_none() {
+                    state.rollout_id = payload.get("id").and_then(|v| v.as_str()).map(String::from);
                 }
             }
             continue;
@@ -526,10 +794,10 @@ fn parse_codex_file(
         if ty == "turn_context" {
             if let Some(payload) = obj.get("payload") {
                 if let Some(m) = payload.get("model").and_then(|v| v.as_str()) {
-                    current_model = Some(m.to_string());
+                    state.model = Some(m.to_string());
                 } else if let Some(info) = payload.get("info") {
                     if let Some(m) = info.get("model").and_then(|v| v.as_str()) {
-                        current_model = Some(m.to_string());
+                        state.model = Some(m.to_string());
                     }
                 }
             }
@@ -554,69 +822,61 @@ fn parse_codex_file(
             Some(d) => d,
             None => continue,
         };
-        if !in_range(&day, range) {
+
+        let info = payload.get("info");
+        let total = info.and_then(|i| i.get("total_token_usage"));
+        let last = info.and_then(|i| i.get("last_token_usage"));
+        // The counter advances on EVERY event, in the scan window or not. If
+        // it only advanced on in-window events, the first in-window event of a
+        // rollout that began before the window would be measured from zero,
+        // and everything the rollout used before the window would land on the
+        // window's first day.
+        let delta = if let Some(total) = total {
+            state.counter.observe_total(codex_totals(total))
+        } else if let Some(last) = last {
+            state.counter.observe_last(codex_totals(last))
+        } else {
+            continue;
+        };
+        let at_ms = parse_unix_ms(ts);
+        state.span.observe(at_ms);
+
+        if !in_range(&day, range) || is_zero(&delta) {
             continue;
         }
 
-        let info = payload.get("info");
         let model = info
             .and_then(|i| i.get("model").and_then(|v| v.as_str()))
             .or_else(|| info.and_then(|i| i.get("model_name").and_then(|v| v.as_str())))
             .or_else(|| payload.get("model").and_then(|v| v.as_str()))
             .or_else(|| obj.get("model").and_then(|v| v.as_str()))
             .map(String::from)
-            .or_else(|| current_model.clone())
+            .or_else(|| state.model.clone())
             .unwrap_or_else(|| "gpt-5".to_string());
 
-        let total = info.and_then(|i| i.get("total_token_usage"));
-        let last = info.and_then(|i| i.get("last_token_usage"));
-        let (d_in, d_cached, d_out) = if let Some(total) = total {
-            let t_in = json_i64(total, "input_tokens");
-            let t_cached = json_i64_or(total, &["cached_input_tokens", "cache_read_input_tokens"]);
-            let t_out = json_i64(total, "output_tokens");
-            let deltas = if has_prev {
-                (
-                    (t_in - prev_total.input).max(0),
-                    (t_cached - prev_total.cached).max(0),
-                    (t_out - prev_total.output).max(0),
-                )
-            } else {
-                (t_in.max(0), t_cached.max(0), t_out.max(0))
-            };
-            prev_total = CodexTotals {
-                input: t_in,
-                cached: t_cached,
-                output: t_out,
-            };
-            has_prev = true;
-            deltas
-        } else if let Some(last) = last {
-            (
-                json_i64(last, "input_tokens").max(0),
-                json_i64_or(last, &["cached_input_tokens", "cache_read_input_tokens"]).max(0),
-                json_i64(last, "output_tokens").max(0),
-            )
-        } else {
-            continue;
-        };
-
-        if d_in == 0 && d_cached == 0 && d_out == 0 {
-            continue;
-        }
+        let cached = delta.cached.min(delta.input);
+        // Priced per request, at the rates of the request's own time: the
+        // long-context tier is a property of one request, and a repriced
+        // model's rate depends on when the request was made.
+        let cost_nanos = pricing::codex_cost_usd(&model, delta.input, cached, delta.output, at_ms)
+            .map(|c| (c * COST_SCALE).round() as i64)
+            .unwrap_or(0);
 
         let norm_model = pricing::normalize_codex_model(&model);
         let day_models = out.file_days.entry(day).or_default();
         let packed = day_models
             .entry(norm_model)
-            .or_insert_with(|| vec![0, 0, 0]);
-        packed[0] += d_in;
-        packed[1] += d_cached.min(d_in);
-        packed[2] += d_out;
+            .or_insert_with(|| vec![0, 0, 0, 0]);
+        while packed.len() < 4 {
+            packed.push(0);
+        }
+        packed[0] += delta.input;
+        packed[1] += cached;
+        packed[2] += delta.output;
+        packed[3] += cost_nanos;
     }
 
     out.parsed_bytes = start_offset + bytes_seen;
-    out.last_model = current_model;
-    out.last_totals = if has_prev { Some(prev_total) } else { None };
     out
 }
 
@@ -629,7 +889,7 @@ fn scan_claude_provider(
     range: &DateRange,
 ) -> anyhow::Result<(CostUsageCache, u32, u32)> {
     let mut cache = if opts.force_rescan {
-        CostUsageCache::default()
+        CostUsageCache::for_provider("claude")
     } else {
         cache::load("claude", opts.cache_dir.as_deref())
     };
@@ -686,9 +946,7 @@ fn scan_claude_provider(
                             size,
                             days: merged_days,
                             parsed_bytes: Some(parsed.parsed_bytes),
-                            last_model: None,
-                            last_totals: None,
-                            session_id: None,
+                            ..Default::default()
                         },
                     );
                     files_scanned += 1;
@@ -706,9 +964,7 @@ fn scan_claude_provider(
                             size,
                             days: parsed.file_days,
                             parsed_bytes: Some(parsed.parsed_bytes),
-                            last_model: None,
-                            last_totals: None,
-                            session_id: None,
+                            ..Default::default()
                         },
                     );
                     files_scanned += 1;
@@ -847,7 +1103,7 @@ fn parse_claude_file(path: &Path, range: &DateRange, start_offset: i64) -> Claud
 
         // Per-message cost (bit-exact Swift parity for tiered pricing).
         let cost_nanos = pricing::claude_cost_usd(&model, input, cache_read, cache_create, output)
-            .map(|c| (c * CLAUDE_COST_SCALE).round() as i64)
+            .map(|c| (c * COST_SCALE).round() as i64)
             .unwrap_or(0);
 
         let norm_model = pricing::normalize_claude_model(&model);
@@ -894,7 +1150,8 @@ fn emit_entries(
 ) -> Vec<DailyEntry> {
     let mut out: Vec<DailyEntry> = Vec::new();
 
-    // Codex: [input, cached, output] — cost computed from pricing table
+    // Codex: [input, cached, output, cost_nanos] — cost summed per request
+    // during parse. A model without rates has no cost (None), not $0.
     for (day, models) in &codex_cache.days {
         if !in_range(day, range) {
             continue;
@@ -903,10 +1160,15 @@ fn emit_entries(
             let input = packed.first().copied().unwrap_or(0);
             let cached = packed.get(1).copied().unwrap_or(0);
             let output = packed.get(2).copied().unwrap_or(0);
+            let cost_nanos = packed.get(3).copied().unwrap_or(0);
             if input == 0 && cached == 0 && output == 0 {
                 continue;
             }
-            let cost = pricing::codex_cost_usd(model, input, cached, output);
+            let cost = if pricing::codex_model_is_priced(model) {
+                Some(cost_nanos as f64 / COST_SCALE)
+            } else {
+                None
+            };
             out.push(DailyEntry {
                 date: day.clone(),
                 provider: "Codex".into(),
@@ -940,7 +1202,7 @@ fn emit_entries(
             let cost = if model == CLAUDE_MSG_BUCKET_MODEL {
                 None
             } else if cost_nanos > 0 {
-                Some(cost_nanos as f64 / CLAUDE_COST_SCALE)
+                Some(cost_nanos as f64 / COST_SCALE)
             } else {
                 pricing::claude_cost_usd(model, input, cache_read, cache_create, output)
             };
@@ -1058,14 +1320,267 @@ mod tests {
         let mut days = HashMap::new();
         days.insert(day.to_string(), models);
         FileEntry {
-            mtime_unix_ms: 0,
-            size: 0,
             days,
-            parsed_bytes: None,
-            last_model: None,
-            last_totals: None,
-            session_id: None,
+            ..Default::default()
         }
+    }
+
+    // ---- CodexCounter: cumulative snapshots → per-request deltas ----
+
+    fn tot(input: i64, cached: i64, output: i64) -> CodexTotals {
+        CodexTotals {
+            input,
+            cached,
+            output,
+        }
+    }
+
+    /// Sum of the input deltas `CodexCounter` produces for these snapshots.
+    fn counted_input(snapshots: &[i64]) -> i64 {
+        let mut c = CodexCounter::default();
+        snapshots
+            .iter()
+            .map(|&i| c.observe_total(tot(i, 0, 0)).input)
+            .sum()
+    }
+
+    /// The rule this replaced: baseline follows every snapshot.
+    fn old_rule_input(snapshots: &[i64]) -> i64 {
+        let mut prev: Option<i64> = None;
+        let mut sum = 0;
+        for &i in snapshots {
+            sum += prev.map_or(i, |p| (i - p).max(0));
+            prev = Some(i);
+        }
+        sum
+    }
+
+    /// A pure high-water mark: only growth above the highest snapshot.
+    fn high_water_input(snapshots: &[i64]) -> i64 {
+        let mut peak: Option<i64> = None;
+        let mut sum = 0;
+        for &i in snapshots {
+            sum += peak.map_or(i, |p| (i - p).max(0));
+            peak = Some(peak.map_or(i, |p| p.max(i)));
+        }
+        sum
+    }
+
+    #[test]
+    fn counter_monotone_counts_plain_differences() {
+        let mut c = CodexCounter::default();
+        assert_eq!(c.observe_total(tot(100, 0, 10)), tot(100, 0, 10));
+        assert_eq!(c.observe_total(tot(250, 100, 30)), tot(150, 100, 20));
+        assert_eq!(c.observe_total(tot(400, 150, 70)), tot(150, 50, 40));
+    }
+
+    #[test]
+    fn counter_repeated_snapshot_counts_zero() {
+        let mut c = CodexCounter::default();
+        c.observe_total(tot(500, 100, 50));
+        assert_eq!(c.observe_total(tot(500, 100, 50)), tot(0, 0, 0));
+        assert_eq!(c.observe_total(tot(500, 100, 50)), tot(0, 0, 0));
+    }
+
+    #[test]
+    fn counter_interleaved_series_never_recount_the_gap() {
+        // A high series (1000 → 1300) and a low one (100 → 130) written into
+        // one file, alternating. Every jump back up to A is only A's growth.
+        let snapshots = [1000, 100, 1100, 110, 1200, 120, 1300, 130];
+        assert_eq!(counted_input(&snapshots), 1300);
+        // The old rule re-counts the ~1000 gap on every jump back up.
+        assert_eq!(old_rule_input(&snapshots), 1000 + 1000 + 1090 + 1180);
+    }
+
+    #[test]
+    fn counter_restart_keeps_counting() {
+        // The counter reaches 2000, restarts at 100 and climbs to 900. The
+        // requests after the restart are real: 300 + 500 more.
+        let snapshots = [1000, 2000, 100, 400, 900];
+        assert_eq!(counted_input(&snapshots), 2800);
+        // A pure high-water mark would drop all of it.
+        assert_eq!(high_water_input(&snapshots), 2000);
+    }
+
+    #[test]
+    fn counter_restart_passing_the_old_peak_counts_from_the_peak() {
+        // After the restart the counter climbs past the old peak: the request
+        // that crosses it is counted from the peak (the documented undercount),
+        // and growth after that is counted normally.
+        let snapshots = [2000, 100, 1500, 2300, 2600];
+        assert_eq!(counted_input(&snapshots), 2000 + 1400 + 300 + 300);
+    }
+
+    #[test]
+    fn counter_components_are_independent_and_never_negative() {
+        let mut c = CodexCounter::default();
+        c.observe_total(tot(1000, 800, 100));
+        // Input and cached drop (restart), output grows past its peak.
+        let d = c.observe_total(tot(50, 20, 130));
+        assert_eq!(d, tot(0, 0, 30));
+        let d = c.observe_total(tot(-5, -5, -5));
+        assert_eq!(d, tot(0, 0, 0));
+    }
+
+    #[test]
+    fn counter_last_only_event_is_not_counted_again_by_a_later_total() {
+        let mut c = CodexCounter::default();
+        assert_eq!(c.observe_total(tot(100, 0, 10)), tot(100, 0, 10));
+        // An event with only last_token_usage (this request: 50 / 5).
+        assert_eq!(c.observe_last(tot(50, 0, 5)), tot(50, 0, 5));
+        // The next cumulative snapshot already includes those 50 / 5.
+        assert_eq!(c.observe_total(tot(180, 0, 20)), tot(30, 0, 5));
+    }
+
+    #[test]
+    fn counter_resumes_from_saved_state_like_a_full_pass() {
+        let snapshots = [1000, 100, 1100, 150, 1200];
+        let full = counted_input(&snapshots);
+        // Parse the first two, save, resume for the rest.
+        let mut c = CodexCounter::default();
+        let first: i64 = snapshots[..2]
+            .iter()
+            .map(|&i| c.observe_total(tot(i, 0, 0)).input)
+            .sum();
+        let mut resumed = CodexCounter {
+            prev: c.prev,
+            peak: c.peak,
+        };
+        let rest: i64 = snapshots[2..]
+            .iter()
+            .map(|&i| resumed.observe_total(tot(i, 0, 0)).input)
+            .sum();
+        assert_eq!(first + rest, full);
+        // Resuming without the peak (only the previous snapshot, as the cache
+        // used to store) would re-count the gap.
+        let mut peakless = CodexCounter {
+            prev: c.prev,
+            peak: None,
+        };
+        let rest_peakless: i64 = snapshots[2..]
+            .iter()
+            .map(|&i| peakless.observe_total(tot(i, 0, 0)).input)
+            .sum();
+        assert_ne!(first + rest_peakless, full);
+    }
+
+    // ---- codex_duplicate_copies ----
+
+    fn rollout(id: &str, first: i64, last: i64, events: i64, final_input: i64) -> FileEntry {
+        FileEntry {
+            rollout_id: Some(id.to_string()),
+            first_event_ms: Some(first),
+            last_event_ms: Some(last),
+            event_count: Some(events),
+            peak_totals: Some(tot(final_input, 0, 0)),
+            ..Default::default()
+        }
+    }
+
+    fn cache_of(files: &[(&str, FileEntry)]) -> CostUsageCache {
+        let mut cache = CostUsageCache::default();
+        for (path, entry) in files {
+            cache.files.insert(path.to_string(), entry.clone());
+        }
+        cache
+    }
+
+    #[test]
+    fn identical_copies_of_one_rollout_count_once() {
+        let copy = rollout("r1", 1_000, 5_000, 12, 9_000);
+        let cache = cache_of(&[
+            (
+                "/h/.codex/sessions/2026/09/10/rollout-r1.jsonl",
+                copy.clone(),
+            ),
+            ("/h/.codex/archived_sessions/rollout-r1.jsonl", copy),
+        ]);
+        let copies = codex_duplicate_copies(&cache);
+        assert_eq!(copies.len(), 1);
+        // Equal completeness: the first path in sort order is kept.
+        assert!(copies.contains("/h/.codex/sessions/2026/09/10/rollout-r1.jsonl"));
+    }
+
+    #[test]
+    fn the_more_complete_copy_is_kept() {
+        // A stale copy taken mid-session (fewer events) and the full file.
+        let cache = cache_of(&[
+            ("/a/rollout-r1.jsonl", rollout("r1", 1_000, 3_000, 6, 4_000)),
+            (
+                "/b/rollout-r1.jsonl",
+                rollout("r1", 1_000, 5_000, 12, 9_000),
+            ),
+        ]);
+        let copies = codex_duplicate_copies(&cache);
+        assert_eq!(
+            copies.into_iter().collect::<Vec<_>>(),
+            vec!["/a/rollout-r1.jsonl"]
+        );
+    }
+
+    #[test]
+    fn a_continuation_under_the_same_id_is_not_a_copy() {
+        // Same rollout id, no overlap in time: a rollout continued in a second
+        // file. Both halves are real usage.
+        let cache = cache_of(&[
+            ("/a/rollout-r1.jsonl", rollout("r1", 1_000, 3_000, 6, 4_000)),
+            (
+                "/b/rollout-r1b.jsonl",
+                rollout("r1", 3_001, 9_000, 9, 5_000),
+            ),
+        ]);
+        assert!(codex_duplicate_copies(&cache).is_empty());
+    }
+
+    #[test]
+    fn different_rollouts_are_never_copies() {
+        // Overlapping in time (a parent and its sub-agent, say) but with
+        // different rollout ids.
+        let cache = cache_of(&[
+            (
+                "/a/parent.jsonl",
+                rollout("parent", 1_000, 9_000, 20, 50_000),
+            ),
+            ("/a/sub.jsonl", rollout("sub", 2_000, 4_000, 5, 3_000)),
+        ]);
+        assert!(codex_duplicate_copies(&cache).is_empty());
+    }
+
+    #[test]
+    fn files_without_token_events_or_ids_are_left_alone() {
+        let mut no_events = rollout("r1", 0, 0, 0, 0);
+        no_events.first_event_ms = None;
+        no_events.last_event_ms = None;
+        let mut no_id = rollout("r1", 1_000, 5_000, 12, 9_000);
+        no_id.rollout_id = None;
+        let cache = cache_of(&[
+            ("/a/shell.jsonl", no_events),
+            ("/a/noid.jsonl", no_id),
+            ("/a/real.jsonl", rollout("r1", 1_000, 5_000, 12, 9_000)),
+        ]);
+        assert!(codex_duplicate_copies(&cache).is_empty());
+    }
+
+    #[test]
+    fn rebuilt_aggregate_leaves_out_copies() {
+        let mut copy = rollout("r1", 1_000, 5_000, 12, 9_000);
+        copy.days = HashMap::from([(
+            "2026-09-10".to_string(),
+            HashMap::from([("gpt-5.5".to_string(), vec![9_000, 1_000, 300, 42])]),
+        )]);
+        let mut cache = cache_of(&[("/a/r1.jsonl", copy.clone()), ("/b/r1.jsonl", copy)]);
+        let copies = codex_duplicate_copies(&cache);
+        rebuild_days_from_files(&mut cache, &copies);
+        assert_eq!(
+            cache.days["2026-09-10"]["gpt-5.5"],
+            vec![9_000, 1_000, 300, 42]
+        );
+        // Without leaving the copy out the day would be doubled.
+        rebuild_days_from_files(&mut cache, &HashSet::new());
+        assert_eq!(
+            cache.days["2026-09-10"]["gpt-5.5"],
+            vec![18_000, 2_000, 600, 84]
+        );
     }
 
     #[test]
