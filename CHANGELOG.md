@@ -8,9 +8,11 @@ All notable changes to CLI Pulse Desktop (Windows + Linux).
 
 - **Codex prices follow OpenAI's published rates.** `gpt-5.5` was priced at the `gpt-5.4` placeholder
   ($2.50 / $15 per 1M) that was added before its prices existed; it is now $5 / $30. `gpt-6-astra`,
-  `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.6-cyber` and `gpt-5.5-cyber` had no rates at all and
-  showed no cost; they are priced now. The aliases `gpt-5.6`, `gpt-reserve` and the Daybreak names resolve to
-  the model they route to. The table follows the one bundled with steipete/CodexBar (MIT).
+  `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.6-cyber`, `gpt-5.5-cyber`, `gpt-6-sol`, `gpt-6-luna` and
+  `gpt-6.1-sol` had no rates at all and showed no cost; they are priced now, and the `-pro` models gained their
+  long-context tier. The aliases `gpt-5.6`, `gpt-reserve` and the Daybreak names resolve to the model they
+  route to. The table follows the one bundled with steipete/CodexBar (MIT), plus the models OpenAI released
+  after it.
 - **Codex cost is priced per request.** A request with more than 272K input tokens is billed at the model's
   long-context rates for the whole request, and a repriced model keeps its old rate for requests made before
   the change (Sol before 2026-08-21, Terra and Luna before 2026-07-30). Both need the request, not the day,

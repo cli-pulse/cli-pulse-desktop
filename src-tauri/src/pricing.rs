@@ -33,6 +33,11 @@
 //   used; the bundled Standard rates are.
 // - `gpt-5.5-codex`, `gpt-5.5-mini` and `gpt-5.5-nano` are not in upstream's
 //   table. They are this file's own rows (see the comments on them).
+// - Also ours, from https://developers.openai.com/api/docs/pricing (checked
+//   2026-09-30): `gpt-6-sol`, `gpt-6-luna` and `gpt-6.1-sol`, released after
+//   the upstream commit, and the long-context tier of the two `-pro` rows,
+//   which upstream's table does not carry. The macOS app's table has the same
+//   rows.
 //
 // ─── MIT License (full notice required by upstream) ───────────────
 //
@@ -135,7 +140,9 @@ static CODEX_MODELS: Lazy<HashMap<&'static str, CodexModel>> = Lazy::new(|| {
     );
     m.insert("gpt-5.4-mini", flat(7.5e-7, Some(7.5e-8), 4.5e-6));
     m.insert("gpt-5.4-nano", flat(2e-7, Some(2e-8), 1.25e-6));
-    m.insert("gpt-5.4-pro", flat(3e-5, None, 1.8e-4));
+    // OpenAI lists $60 / $270 above 272K for both -pro models; no cached rate.
+    let pro = tiered(rates(3e-5, None, 1.8e-4), rates(6e-5, None, 2.7e-4));
+    m.insert("gpt-5.4-pro", pro);
     // gpt-5.5 now has published prices ($5 / $30 per 1M, with a long-context
     // tier). Until they existed this row mirrored gpt-5.4 ($2.50 / $15) as a
     // placeholder, which priced gpt-5.5 at half its real rate.
@@ -153,7 +160,7 @@ static CODEX_MODELS: Lazy<HashMap<&'static str, CodexModel>> = Lazy::new(|| {
     // that names them is not priced at nothing.
     m.insert("gpt-5.5-mini", flat(7.5e-7, Some(7.5e-8), 4.5e-6));
     m.insert("gpt-5.5-nano", flat(2e-7, Some(2e-8), 1.25e-6));
-    m.insert("gpt-5.5-pro", flat(3e-5, None, 1.8e-4));
+    m.insert("gpt-5.5-pro", pro);
     // Cyber models publish no long-context tier.
     m.insert("gpt-5.5-cyber", flat(1.25e-5, Some(1.25e-6), 7.5e-5));
     m.insert("gpt-5.6-cyber", flat(1.25e-5, Some(1.25e-6), 7.5e-5));
@@ -183,6 +190,30 @@ static CODEX_MODELS: Lazy<HashMap<&'static str, CodexModel>> = Lazy::new(|| {
         tiered(
             rates(1e-5, Some(1e-6), 5e-5),
             rates(2e-5, Some(2e-6), 7.5e-5),
+        ),
+    );
+    // Released after the upstream table was taken (OpenAI changelog,
+    // 2026-09-22 and 2026-09-29). gpt-6.1-sol's cached rate is 5% of input,
+    // not 10%.
+    m.insert(
+        "gpt-6-sol",
+        tiered(
+            rates(2e-6, Some(2e-7), 1e-5),
+            rates(4e-6, Some(4e-7), 1.5e-5),
+        ),
+    );
+    m.insert(
+        "gpt-6-luna",
+        tiered(
+            rates(1e-7, Some(1e-8), 5e-7),
+            rates(2e-7, Some(2e-8), 7.5e-7),
+        ),
+    );
+    m.insert(
+        "gpt-6.1-sol",
+        tiered(
+            rates(2e-6, Some(1e-7), 1e-5),
+            rates(4e-6, Some(2e-7), 1.5e-5),
         ),
     );
     m
@@ -666,6 +697,20 @@ mod tests {
             codex_cost_usd("gpt-5.5-cyber", 100_000, 0, 10_000, None).unwrap(),
             100_000.0 * 1.25e-5 + 10_000.0 * 7.5e-5,
         );
+        close(
+            codex_cost_usd("gpt-6-sol", 100_000, 0, 10_000, None).unwrap(),
+            100_000.0 * 2e-6 + 10_000.0 * 1e-5,
+        );
+        close(
+            codex_cost_usd("gpt-6-luna", 100_000, 0, 10_000, None).unwrap(),
+            100_000.0 * 1e-7 + 10_000.0 * 5e-7,
+        );
+        // gpt-6.1-sol: cached input at 5% of input. 100K input, 80K cached:
+        // 20K @ $2/M + 80K @ $0.10/M = $0.04 + $0.008.
+        close(
+            codex_cost_usd("gpt-6.1-sol", 100_000, 80_000, 0, None).unwrap(),
+            0.048,
+        );
     }
 
     #[test]
@@ -692,6 +737,16 @@ mod tests {
         close(
             codex_cost_usd("gpt-5.4", 300_000, 0, 0, None).unwrap(),
             1.50,
+        );
+        // The -pro models have a tier and no cached rate: 300K with 100K
+        // "cached" is all billed at the long-context input rate, $60/M.
+        close(
+            codex_cost_usd("gpt-5.5-pro", 300_000, 100_000, 0, None).unwrap(),
+            18.0,
+        );
+        close(
+            codex_cost_usd("gpt-5.4-pro", 100_000, 0, 1_000, None).unwrap(),
+            3.0 + 0.18,
         );
         // A flat model never switches: 300K @ $1.25/M = $0.375.
         close(codex_cost_usd("gpt-5", 300_000, 0, 0, None).unwrap(), 0.375);
