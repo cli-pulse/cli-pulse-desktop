@@ -2200,6 +2200,32 @@ mod tests {
     }
 
     #[test]
+    fn a_copied_session_meta_too_long_to_decode_still_marks_the_copy() {
+        // Copied session_meta lines are often far over the 32 KB decode
+        // limit; their head says what they are and where they sit.
+        let long_parent_meta = format!(
+            r#"{{"timestamp":"2026-09-29T11:10:00.100Z","type":"session_meta","ordinal":1,"payload":{{"id":"parent","base_instructions":{{"text":"{}"}}}}}}"#,
+            "x".repeat(40 * 1024)
+        );
+        let path = temp_rollout(
+            "long-meta",
+            &[
+                CHILD_META,
+                &long_parent_meta,
+                &token_line(2, 11, 4000, 4000),
+                &token_line(5, 12, 4600, 600),
+            ],
+        );
+        let parsed = parse_codex_file(&path, &wide_range(), 0, CodexResume::default());
+        assert_eq!(
+            parsed.state.child.unwrap().copied_prefix,
+            Some(CodexCopiedPrefix::AncestorMetadata)
+        );
+        assert_eq!(parsed.file_days["2026-09-29"]["gpt-5"][0], 600);
+        assert_eq!(parsed.state.rollout_id.as_deref(), Some("child"));
+    }
+
+    #[test]
     fn the_line_number_is_read_without_decoding_the_line() {
         assert_eq!(
             codex_line_ordinal(br#"{"type":"session_meta","ordinal":12,"payload":{}}"#),
