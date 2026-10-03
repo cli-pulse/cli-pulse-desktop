@@ -13,14 +13,22 @@
 //!   Linux:   ~/.cache/dev.clipulse.desktop/cost-usage/{provider}-v1.json
 //!   Windows: %LOCALAPPDATA%\dev.clipulse.desktop\cost-usage\{provider}-v1.json
 //!
-//! Packed slot layout (matches Swift):
-//!   Codex:  [input, cached, output]
+//! Packed slot layout:
+//!   Codex:  [input, cached, output, cost_nanos]
 //!   Claude: [input, cache_read, cache_create, output, cost_nanos, msgs]
 //!
-//! `cost_nanos` is per-message cost accumulated during parse, stored at
+//! `cost_nanos` is per-request cost accumulated during parse, stored at
 //! a billion-scale (i.e. `$0.01 → 10_000_000`). Pre-aggregation of cost
-//! is essential because Claude's tiered pricing must evaluate per-message,
-//! not on the day's aggregated tokens (see scanner.rs commit history).
+//! is essential because tiered pricing (Claude's 200K tier, Codex's 272K
+//! long-context tier) must be evaluated per request, not on the day's
+//! aggregated tokens, and because Codex rates depend on the request's date
+//! (see scanner.rs and pricing.rs).
+//!
+//! Each provider's cache also records the version of the rules that produced
+//! it (`rules_version`) and, for Codex, a digest of the price table
+//! (`pricing_fingerprint`). A cache written under other rules or other prices
+//! is discarded on load, so the change reaches every file, including files
+//! that have not changed on disk.
 
 use std::collections::HashMap;
 use std::fs;
@@ -30,16 +38,113 @@ use serde::{Deserialize, Serialize};
 
 const CACHE_SCHEMA_VERSION: u32 = 1;
 
+/// Version of the rules that turn one provider's log lines into cached
+/// numbers. Bump it when a change alters what an unchanged file contributes;
+/// every cache written under an older version is then rebuilt from the logs.
+///
+/// Per provider, so a Codex change does not force a rescan of Claude's logs,
+/// which are usually far larger.
+///
+/// Codex history:
+/// - 0: day-level Codex cost, the cumulative baseline followed every drop.
+/// - 1: an earlier revision of 2, never released. It took every line a
+///   sub-agent numbered before its `subagent_history_start_ordinal` for
+///   copied history, which in a migrated sub-agent rollout is all of its own
+///   work, and decided a request's long-context tier from the tokens counted.
+/// - 2: per-request cost with dated and long-context rates (packed slot 3),
+///   the tier decided by the request an event reports (`last_token_usage`);
+///   the cumulative baseline only rises (a snapshot below it is skipped) and
+///   a counter carried over from before the file's first event is not
+///   counted again (`scanner::CodexCounter`); a sub-agent's or fork's copy of
+///   its parent's history is left out (`CodexCopiedPrefix`); state advances
+///   on out-of-range events too; only a file's first line can be its own
+///   `session_meta`; the rollout id and event span are recorded so a second
+///   copy of a rollout is counted once. The macOS app's Codex rules version 5.
+///
+/// Price-table changes do not need a bump: they change
+/// `pricing_fingerprint(provider)`, which is checked as well. So does a
+/// change to how one of the names the fingerprint records resolves to a row
+/// (`pricing::codex_price_key`).
+pub fn rules_version(provider: &str) -> u32 {
+    match provider {
+        "codex" => 2,
+        _ => 0,
+    }
+}
+
+/// Digest of the prices a provider's cached costs were computed with, or
+/// `None` for a provider whose cache does not depend on one. Codex cost is
+/// priced per request while parsing and kept in the cache, so any change to
+/// the Codex table has to rebuild it (`pricing::codex_pricing_fingerprint`).
+pub fn pricing_fingerprint(provider: &str) -> Option<String> {
+    match provider {
+        "codex" => Some(crate::pricing::codex_pricing_fingerprint()),
+        _ => None,
+    }
+}
+
 pub type Packed = Vec<i64>;
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexTotals {
     pub input: i64,
     pub cached: i64,
     pub output: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Codex: what a rollout's own `session_meta` says when it names a parent (a
+/// sub-agent or a fork), which is when the file can begin with the parent's
+/// history copied in. See `scanner::parse_codex_file`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexChildMeta {
+    /// Time of the file's own `session_meta`, Unix ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta_ms: Option<i64>,
+    /// `subagent_history_start_ordinal`: the number Codex gives the first
+    /// line of the file's own history. Whether the lines numbered before it
+    /// were copied in is `copied_prefix`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_start_ordinal: Option<i64>,
+    /// How the copied part of a file with a `history_start_ordinal` was
+    /// recognised; `None` until it has been. Kept so that an incremental
+    /// parse goes on applying the answer the earlier part of the file gave.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copied_prefix: Option<CodexCopiedPrefix>,
+}
+
+/// What marks the copied part of a sub-agent or fork rollout that names a
+/// history boundary (`subagent_history_start_ordinal`). Codex writes two
+/// shapes:
+///
+/// * A current child rollout copies its ancestor's history in *with* the
+///   ancestor's `session_meta`, just after its own, and numbers its own
+///   history from the boundary. The lines before the boundary are the
+///   ancestor's.
+/// * Codex's migration of older sub-agent rollouts rewrites them without the
+///   copied `session_meta` lines and moves the boundary to the end of the
+///   file, so every line is numbered before it. The boundary marks nothing
+///   there: the file holds the sub-agent's own work, which starts at the
+///   parent's first inter-agent message to it. What comes before that message
+///   is the parent's last requests, replayed.
+///
+/// Same cases as the macOS app's `CodexCopiedPrefix`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexCopiedPrefix {
+    /// An ancestor's `session_meta` came before the boundary: the lines
+    /// numbered before the boundary are copied history.
+    AncestorMetadata,
+    /// No copied `session_meta`; an inter-agent message came before the
+    /// boundary: the token events before it were the parent's replayed tail,
+    /// and everything after it counts.
+    InterAgentMessage,
+    /// Neither came before the held events had to be decided (at the end of a
+    /// read, or at a line numbered past the boundary): they counted, and so
+    /// does the rest.
+    NoMarker,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FileEntry {
     pub mtime_unix_ms: i64,
     pub size: i64,
@@ -51,16 +156,45 @@ pub struct FileEntry {
     pub parsed_bytes: Option<i64>,
     #[serde(default)]
     pub last_model: Option<String>,
+    /// Codex: the cumulative totals counted so far, which the next
+    /// `total_token_usage` snapshot is measured from. It only rises. See
+    /// `scanner::CodexCounter`.
     #[serde(default)]
     pub last_totals: Option<CodexTotals>,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// Codex: `session_meta.payload.id`, the id of this rollout. Unlike
+    /// `session_id`, which a sub-agent's rollout shares with its parent, this
+    /// is the rollout's own. Used only to recognise a second copy of the same
+    /// rollout (see `scanner::codex_duplicate_copies`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollout_id: Option<String>,
+    /// Codex: time of the first and last token event in the whole file (not
+    /// just the scan window), Unix ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_event_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_event_ms: Option<i64>,
+    /// Codex: number of token events in the whole file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_count: Option<i64>,
+    /// Codex: set when the rollout names a parent. Kept so that a file parsed
+    /// incrementally still leaves out the parent's copied history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_child: Option<CodexChildMeta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CostUsageCache {
     #[serde(default = "default_version")]
     pub version: u32,
+    /// `rules_version(provider)` at the time this cache was built. Absent in
+    /// caches written before it existed, which read as 0.
+    #[serde(default)]
+    pub rules_version: u32,
+    /// `pricing_fingerprint(provider)` at the time this cache was built.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing_fingerprint: Option<String>,
     #[serde(default)]
     pub last_scan_unix_ms: i64,
     #[serde(default)]
@@ -80,10 +214,34 @@ impl Default for CostUsageCache {
     fn default() -> Self {
         Self {
             version: CACHE_SCHEMA_VERSION,
+            rules_version: 0,
+            pricing_fingerprint: None,
             last_scan_unix_ms: 0,
             files: HashMap::new(),
             days: HashMap::new(),
         }
+    }
+}
+
+impl CostUsageCache {
+    /// An empty cache stamped with `provider`'s current rules and prices.
+    /// Every fresh cache the scanner builds must come from here: one built
+    /// from `Default` would be discarded by the next `load` and re-parsed from
+    /// scratch on every scan.
+    pub fn for_provider(provider: &str) -> Self {
+        Self {
+            rules_version: rules_version(provider),
+            pricing_fingerprint: pricing_fingerprint(provider),
+            ..Self::default()
+        }
+    }
+
+    /// Whether this cache was built under `provider`'s current rules and
+    /// prices, so its numbers can be reused.
+    pub fn is_current_for(&self, provider: &str) -> bool {
+        self.version == CACHE_SCHEMA_VERSION
+            && self.rules_version == rules_version(provider)
+            && self.pricing_fingerprint == pricing_fingerprint(provider)
     }
 }
 
@@ -117,36 +275,40 @@ pub fn compare_cache_dir() -> Option<PathBuf> {
 }
 
 pub fn load(provider: &str, override_dir: Option<&Path>) -> CostUsageCache {
+    let fresh = || CostUsageCache::for_provider(provider);
     let path = match cache_path(provider, override_dir) {
         Some(p) => p,
-        None => return CostUsageCache::default(),
+        None => return fresh(),
     };
     if !path.exists() {
-        return CostUsageCache::default();
+        return fresh();
     }
     let text = match fs::read_to_string(&path) {
         Ok(t) => t,
         Err(e) => {
             log::warn!("cache::load read failed ({}): {e}", path.display());
-            return CostUsageCache::default();
+            return fresh();
         }
     };
     match serde_json::from_str::<CostUsageCache>(&text) {
-        Ok(cache) if cache.version == CACHE_SCHEMA_VERSION => cache,
+        Ok(cache) if cache.is_current_for(provider) => cache,
         Ok(cache) => {
             log::info!(
-                "cache::load version mismatch ({} vs {}), starting fresh",
+                "cache::load({provider}) written under schema {} / rules {} / prices {:?}, current is {CACHE_SCHEMA_VERSION} / {} / {:?}; rebuilding",
                 cache.version,
-                CACHE_SCHEMA_VERSION
+                cache.rules_version,
+                cache.pricing_fingerprint,
+                rules_version(provider),
+                pricing_fingerprint(provider),
             );
-            CostUsageCache::default()
+            fresh()
         }
         Err(e) => {
             log::warn!(
                 "cache::load parse failed ({}): {e} — starting fresh",
                 path.display()
             );
-            CostUsageCache::default()
+            fresh()
         }
     }
 }
@@ -325,9 +487,7 @@ mod tests {
             size: 500,
             days: HashMap::new(),
             parsed_bytes: Some(500),
-            last_model: None,
-            last_totals: None,
-            session_id: None,
+            ..Default::default()
         };
         assert_eq!(
             decide_action(Some(&entry), 1000, 500),
@@ -342,9 +502,7 @@ mod tests {
             size: 500,
             days: HashMap::new(),
             parsed_bytes: Some(500),
-            last_model: None,
-            last_totals: None,
-            session_id: None,
+            ..Default::default()
         };
         let action = decide_action(Some(&entry), 2000, 800);
         assert_eq!(action, FileAction::Incremental { start_offset: 500 });
@@ -357,9 +515,7 @@ mod tests {
             size: 500,
             days: HashMap::new(),
             parsed_bytes: Some(500),
-            last_model: None,
-            last_totals: None,
-            session_id: None,
+            ..Default::default()
         };
         assert_eq!(
             decide_action(Some(&entry), 2000, 400),
@@ -395,7 +551,7 @@ mod tests {
 
         let mut cache = CostUsageCache {
             last_scan_unix_ms: 1234567890,
-            ..Default::default()
+            ..CostUsageCache::for_provider("codex")
         };
         let mut models = HashMap::new();
         models.insert("gpt-5".to_string(), vec![1000, 0, 200]);
@@ -408,6 +564,132 @@ mod tests {
         assert_eq!(loaded.days["2026-04-24"]["gpt-5"], vec![1000, 0, 200]);
 
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn codex_cache_from_older_rules_is_rebuilt_but_claude_is_kept() {
+        let tmp = std::env::temp_dir().join(format!(
+            "cli-pulse-cache-rules-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let seeded = || {
+            let mut cache = CostUsageCache::default();
+            let mut models = HashMap::new();
+            models.insert("m".to_string(), vec![1000, 0, 200]);
+            cache.days.insert("2026-04-24".to_string(), models);
+            cache
+        };
+
+        // A Codex cache written before the rules version existed (reads as
+        // 0) holds day-priced numbers: it must not be reused.
+        save("codex", &seeded(), Some(&tmp)).unwrap();
+        let codex = load("codex", Some(&tmp));
+        assert!(codex.days.is_empty(), "stale Codex cache was reused");
+        assert_eq!(codex.rules_version, rules_version("codex"));
+        assert_eq!(rules_version("codex"), 2);
+
+        // One written by the unreleased revision 1 counted a migrated
+        // sub-agent's own work as copied history: rebuilt too.
+        let mut revision_1 = seeded();
+        revision_1.rules_version = 1;
+        revision_1.pricing_fingerprint = pricing_fingerprint("codex");
+        save("codex", &revision_1, Some(&tmp)).unwrap();
+        assert!(load("codex", Some(&tmp)).days.is_empty());
+
+        // The same file on the Claude side is still current: no rescan.
+        save("claude", &seeded(), Some(&tmp)).unwrap();
+        let claude = load("claude", Some(&tmp));
+        assert_eq!(claude.days["2026-04-24"]["m"], vec![1000, 0, 200]);
+
+        // And a Codex cache written under the current rules and prices is kept.
+        let mut current = seeded();
+        current.rules_version = rules_version("codex");
+        current.pricing_fingerprint = pricing_fingerprint("codex");
+        save("codex", &current, Some(&tmp)).unwrap();
+        assert_eq!(
+            load("codex", Some(&tmp)).days["2026-04-24"]["m"],
+            vec![1000, 0, 200]
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn codex_cache_priced_with_another_table_is_rebuilt() {
+        // Codex cost is priced while parsing and kept in the cache. A table
+        // change (a new row, a repricing, an alias) must reach requests that
+        // are already cached, with no one having to remember a version bump.
+        let tmp = std::env::temp_dir().join(format!(
+            "cli-pulse-cache-prices-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let seeded = |fingerprint: Option<String>| {
+            let mut cache = CostUsageCache::for_provider("codex");
+            cache.pricing_fingerprint = fingerprint;
+            let mut models = HashMap::new();
+            models.insert("m".to_string(), vec![1000, 0, 200, 42]);
+            cache.days.insert("2026-04-24".to_string(), models);
+            cache
+        };
+
+        let current = pricing_fingerprint("codex");
+        assert!(current.is_some());
+        assert_eq!(
+            CostUsageCache::for_provider("codex").pricing_fingerprint,
+            current
+        );
+
+        for stale in [None, Some("0000000000000000".to_string())] {
+            save("codex", &seeded(stale.clone()), Some(&tmp)).unwrap();
+            let loaded = load("codex", Some(&tmp));
+            assert!(
+                loaded.days.is_empty(),
+                "Codex cache priced with {stale:?} was reused"
+            );
+            assert_eq!(loaded.pricing_fingerprint, current);
+        }
+
+        save("codex", &seeded(current.clone()), Some(&tmp)).unwrap();
+        assert_eq!(
+            load("codex", Some(&tmp)).days["2026-04-24"]["m"],
+            vec![1000, 0, 200, 42]
+        );
+
+        // Claude's cache does not depend on it and never carries one.
+        assert_eq!(pricing_fingerprint("claude"), None);
+        let mut claude = CostUsageCache::for_provider("claude");
+        claude.days.insert(
+            "2026-04-24".to_string(),
+            HashMap::from([("c".to_string(), vec![1])]),
+        );
+        save("claude", &claude, Some(&tmp)).unwrap();
+        assert_eq!(load("claude", Some(&tmp)).days["2026-04-24"]["c"], vec![1]);
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn older_cache_json_without_the_new_fields_still_parses() {
+        // A file entry written before this version has none of the Codex
+        // identity fields; they read as absent instead of failing the load.
+        let json = r#"{"version":1,"last_scan_unix_ms":5,"files":{"/a.jsonl":{"mtime_unix_ms":1,"size":2,"days":{},"parsed_bytes":2,"last_model":null,"last_totals":null,"session_id":null}},"days":{}}"#;
+        let cache: CostUsageCache = serde_json::from_str(json).unwrap();
+        assert_eq!(cache.rules_version, 0);
+        assert!(cache.pricing_fingerprint.is_none());
+        assert!(!cache.is_current_for("codex"));
+        let entry = &cache.files["/a.jsonl"];
+        assert!(entry.rollout_id.is_none());
+        assert!(entry.first_event_ms.is_none() && entry.event_count.is_none());
     }
 
     #[test]

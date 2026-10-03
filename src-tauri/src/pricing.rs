@@ -5,17 +5,269 @@
 //!
 //! Claude sonnet-4-5 / sonnet-4-6 / sonnet-4-20250514 use tiered pricing:
 //! first 200K input tokens at base rate, above threshold at 2x rate.
+//!
+//! Codex rates follow the table bundled with steipete/CodexBar (notice below),
+//! which cites OpenAI's published API prices. Three rules come with it:
+//!
+//! - **Long context is decided per request.** When one request sends more than
+//!   272K input tokens, every token of that request is billed at the model's
+//!   long-context rates. A day's total crosses 272K almost always, so Codex cost
+//!   must be summed from per-request costs (`scanner.rs` does this while
+//!   parsing), never computed from a day's tokens. The request is the one a
+//!   `token_count` event reports (`last_token_usage`), whatever the event's
+//!   counted share of it (`codex_event_cost_usd`).
+//! - **Rates are dated.** A model that was repriced keeps its old rate for
+//!   requests made before the change (`CODEX_EARLIER_RATES`). Pass the request's
+//!   time; `None` means today's rates.
+//! - **Aliases.** A few names OpenAI routes to a priced model (`gpt-5.6` is Sol)
+//!   are billed at that model's rates. Only the price lookup resolves them: the
+//!   model is stored, uploaded and shown under the name Codex logged, as the
+//!   macOS app does.
+//!
+//! Codex cost is computed while parsing and cached per file, so the cache
+//! records `codex_pricing_fingerprint()` and is rebuilt when any of the above
+//! changes (see `cache::load`).
+//!
+// Codex rate rows, the dated rates, the aliases and the long-context rule are
+// derived from steipete/CodexBar
+// Sources/CodexBarCore/Vendored/CostUsage/CostUsagePricing.swift, taken at
+// upstream commit 25bba9b7 (2026-09-28) (https://github.com/steipete/CodexBar).
+// The numbers and rules are upstream's; the code is a Rust restatement, and
+// differs from upstream in these ways:
+//
+// - Cache-write rates are left out. Codex CLI logs report no cache writes, so
+//   upstream bills every uncached input token at the input rate for them too.
+// - API Fast (priority) multipliers and the models.dev live catalogue are not
+//   used; the bundled Standard rates are.
+// - `gpt-5.5-codex`, `gpt-5.5-mini` and `gpt-5.5-nano` are not in upstream's
+//   table. They are this file's own rows (see the comments on them).
+// - Also ours, from https://developers.openai.com/api/docs/pricing (checked
+//   2026-09-30): `gpt-6-sol`, `gpt-6-luna` and `gpt-6.1-sol`, released after
+//   the upstream commit, and the long-context tier of the two `-pro` rows,
+//   which upstream's table does not carry. The macOS app's table has the same
+//   rows.
+//
+// ─── MIT License (full notice required by upstream) ───────────────
+//
+// MIT License
+//
+// Copyright (c) 2026 Peter Steinberger
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+//
+// ──────────────────────────────────────────────────────────────────
 
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy)]
-pub struct CodexModel {
+use crate::cache::CodexTotals;
+
+/// One set of Codex rates, USD per token.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CodexRates {
     pub input: f64,
-    pub output: f64,
+    /// Rate for cached input. `None` bills cached input at the full input rate
+    /// (the `-pro` models publish no cached rate).
     pub cache_read: Option<f64>,
+    pub output: f64,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CodexModel {
+    pub standard: CodexRates,
+    /// Rates for a request whose input exceeds `CODEX_LONG_CONTEXT_INPUT_TOKENS`.
+    /// They apply to the WHOLE request, not only to the tokens above the line.
+    pub long_context: Option<CodexRates>,
+}
+
+/// A request with more input tokens than this is a long-context request.
+pub const CODEX_LONG_CONTEXT_INPUT_TOKENS: i64 = 272_000;
+
+fn rates(input: f64, cache_read: Option<f64>, output: f64) -> CodexRates {
+    CodexRates {
+        input,
+        cache_read,
+        output,
+    }
+}
+
+/// A model with one set of rates, whatever the request size.
+fn flat(input: f64, cache_read: Option<f64>, output: f64) -> CodexModel {
+    CodexModel {
+        standard: rates(input, cache_read, output),
+        long_context: None,
+    }
+}
+
+/// A model whose long-context requests are billed at `long_context`.
+fn tiered(standard: CodexRates, long_context: CodexRates) -> CodexModel {
+    CodexModel {
+        standard,
+        long_context: Some(long_context),
+    }
+}
+
+static CODEX_MODELS: Lazy<HashMap<&'static str, CodexModel>> = Lazy::new(|| {
+    let mut m = HashMap::new();
+    m.insert("gpt-5", flat(1.25e-6, Some(1.25e-7), 1e-5));
+    m.insert("gpt-5-codex", flat(1.25e-6, Some(1.25e-7), 1e-5));
+    m.insert("gpt-5-mini", flat(2.5e-7, Some(2.5e-8), 2e-6));
+    m.insert("gpt-5-nano", flat(5e-8, Some(5e-9), 4e-7));
+    m.insert("gpt-5-pro", flat(1.5e-5, None, 1.2e-4));
+    m.insert("gpt-5.1", flat(1.25e-6, Some(1.25e-7), 1e-5));
+    m.insert("gpt-5.1-codex", flat(1.25e-6, Some(1.25e-7), 1e-5));
+    m.insert("gpt-5.1-codex-max", flat(1.25e-6, Some(1.25e-7), 1e-5));
+    m.insert("gpt-5.1-codex-mini", flat(2.5e-7, Some(2.5e-8), 2e-6));
+    m.insert("gpt-5.2", flat(1.75e-6, Some(1.75e-7), 1.4e-5));
+    m.insert("gpt-5.2-codex", flat(1.75e-6, Some(1.75e-7), 1.4e-5));
+    m.insert("gpt-5.2-pro", flat(2.1e-5, None, 1.68e-4));
+    m.insert("gpt-5.3-codex", flat(1.75e-6, Some(1.75e-7), 1.4e-5));
+    // Research preview, not billed.
+    m.insert("gpt-5.3-codex-spark", flat(0.0, Some(0.0), 0.0));
+    m.insert(
+        "gpt-5.4",
+        tiered(
+            rates(2.5e-6, Some(2.5e-7), 1.5e-5),
+            rates(5e-6, Some(5e-7), 2.25e-5),
+        ),
+    );
+    m.insert("gpt-5.4-mini", flat(7.5e-7, Some(7.5e-8), 4.5e-6));
+    m.insert("gpt-5.4-nano", flat(2e-7, Some(2e-8), 1.25e-6));
+    // OpenAI lists $60 / $270 above 272K for both -pro models; no cached rate.
+    let pro = tiered(rates(3e-5, None, 1.8e-4), rates(6e-5, None, 2.7e-4));
+    m.insert("gpt-5.4-pro", pro);
+    // gpt-5.5 now has published prices ($5 / $30 per 1M, with a long-context
+    // tier). Until they existed this row mirrored gpt-5.4 ($2.50 / $15) as a
+    // placeholder, which priced gpt-5.5 at half its real rate.
+    let gpt_5_5 = tiered(
+        rates(5e-6, Some(5e-7), 3e-5),
+        rates(1e-5, Some(1e-6), 4.5e-5),
+    );
+    m.insert("gpt-5.5", gpt_5_5);
+    // Not in OpenAI's published list. Every `-codex` row above costs the same
+    // as its base model, so this one follows gpt-5.5 instead of keeping the old
+    // gpt-5.4 placeholder, which would now make it half the price of gpt-5.5.
+    m.insert("gpt-5.5-codex", gpt_5_5);
+    // Not in OpenAI's published list either. Kept at the gpt-5.4-mini /
+    // gpt-5.4-nano rates they were given when gpt-5.5 first appeared, so a log
+    // that names them is not priced at nothing.
+    m.insert("gpt-5.5-mini", flat(7.5e-7, Some(7.5e-8), 4.5e-6));
+    m.insert("gpt-5.5-nano", flat(2e-7, Some(2e-8), 1.25e-6));
+    m.insert("gpt-5.5-pro", pro);
+    // Cyber models publish no long-context tier.
+    m.insert("gpt-5.5-cyber", flat(1.25e-5, Some(1.25e-6), 7.5e-5));
+    m.insert("gpt-5.6-cyber", flat(1.25e-5, Some(1.25e-6), 7.5e-5));
+    // GPT-5.6: long context is 2x input and 1.5x output for the whole request.
+    // Sol was repriced from $5 / $30 to $4 / $20 on 2026-08-21, and Terra and
+    // Luna changed on 2026-07-30; the earlier rates are in CODEX_EARLIER_RATES.
+    m.insert(
+        "gpt-5.6-sol",
+        tiered(rates(4e-6, Some(4e-7), 2e-5), rates(8e-6, Some(8e-7), 3e-5)),
+    );
+    m.insert(
+        "gpt-5.6-terra",
+        tiered(
+            rates(2e-6, Some(2e-7), 1.2e-5),
+            rates(4e-6, Some(4e-7), 1.8e-5),
+        ),
+    );
+    m.insert(
+        "gpt-5.6-luna",
+        tiered(
+            rates(2e-7, Some(2e-8), 1.2e-6),
+            rates(4e-7, Some(4e-8), 1.8e-6),
+        ),
+    );
+    m.insert(
+        "gpt-6-astra",
+        tiered(
+            rates(1e-5, Some(1e-6), 5e-5),
+            rates(2e-5, Some(2e-6), 7.5e-5),
+        ),
+    );
+    // Released after the upstream table was taken (OpenAI changelog,
+    // 2026-09-22 and 2026-09-29). gpt-6.1-sol's cached rate is 5% of input,
+    // not 10%.
+    m.insert(
+        "gpt-6-sol",
+        tiered(
+            rates(2e-6, Some(2e-7), 1e-5),
+            rates(4e-6, Some(4e-7), 1.5e-5),
+        ),
+    );
+    m.insert(
+        "gpt-6-luna",
+        tiered(
+            rates(1e-7, Some(1e-8), 5e-7),
+            rates(2e-7, Some(2e-8), 7.5e-7),
+        ),
+    );
+    m.insert(
+        "gpt-6.1-sol",
+        tiered(
+            rates(2e-6, Some(1e-7), 1e-5),
+            rates(4e-6, Some(2e-7), 1.5e-5),
+        ),
+    );
+    m
+});
+
+/// 2026-07-30T00:00:00Z, when GPT-5.6 Terra and Luna took today's rates.
+pub const CODEX_TERRA_LUNA_REPRICED_UNIX_MS: i64 = 1_785_369_600_000;
+/// 2026-08-21T00:00:00Z, when GPT-5.6 Sol took today's rates (OpenAI's API
+/// changelog dates the change August 21).
+pub const CODEX_SOL_REPRICED_UNIX_MS: i64 = 1_787_270_400_000;
+
+/// Rates a model had before it was repriced: `model -> (repriced_at, rates)`.
+/// A request made strictly before `repriced_at` is billed at these.
+static CODEX_EARLIER_RATES: Lazy<HashMap<&'static str, (i64, CodexModel)>> = Lazy::new(|| {
+    let mut m = HashMap::new();
+    m.insert(
+        "gpt-5.6-sol",
+        (
+            CODEX_SOL_REPRICED_UNIX_MS,
+            tiered(
+                rates(5e-6, Some(5e-7), 3e-5),
+                rates(1e-5, Some(1e-6), 4.5e-5),
+            ),
+        ),
+    );
+    m.insert(
+        "gpt-5.6-terra",
+        (
+            CODEX_TERRA_LUNA_REPRICED_UNIX_MS,
+            tiered(
+                rates(2.5e-6, Some(2.5e-7), 1.5e-5),
+                rates(5e-6, Some(5e-7), 2.25e-5),
+            ),
+        ),
+    );
+    m.insert(
+        "gpt-5.6-luna",
+        (
+            CODEX_TERRA_LUNA_REPRICED_UNIX_MS,
+            tiered(rates(1e-6, Some(1e-7), 6e-6), rates(2e-6, Some(2e-7), 9e-6)),
+        ),
+    );
+    m
+});
 
 #[derive(Debug, Clone, Copy)]
 pub struct ClaudeModel {
@@ -29,201 +281,6 @@ pub struct ClaudeModel {
     pub cache_creation_above: Option<f64>,
     pub cache_read_above: Option<f64>,
 }
-
-static CODEX_MODELS: Lazy<HashMap<&'static str, CodexModel>> = Lazy::new(|| {
-    let mut m = HashMap::new();
-    m.insert(
-        "gpt-5",
-        CodexModel {
-            input: 1.25e-6,
-            output: 1e-5,
-            cache_read: Some(1.25e-7),
-        },
-    );
-    m.insert(
-        "gpt-5-codex",
-        CodexModel {
-            input: 1.25e-6,
-            output: 1e-5,
-            cache_read: Some(1.25e-7),
-        },
-    );
-    m.insert(
-        "gpt-5-mini",
-        CodexModel {
-            input: 2.5e-7,
-            output: 2e-6,
-            cache_read: Some(2.5e-8),
-        },
-    );
-    m.insert(
-        "gpt-5-nano",
-        CodexModel {
-            input: 5e-8,
-            output: 4e-7,
-            cache_read: Some(5e-9),
-        },
-    );
-    m.insert(
-        "gpt-5-pro",
-        CodexModel {
-            input: 1.5e-5,
-            output: 1.2e-4,
-            cache_read: None,
-        },
-    );
-    m.insert(
-        "gpt-5.1",
-        CodexModel {
-            input: 1.25e-6,
-            output: 1e-5,
-            cache_read: Some(1.25e-7),
-        },
-    );
-    m.insert(
-        "gpt-5.1-codex",
-        CodexModel {
-            input: 1.25e-6,
-            output: 1e-5,
-            cache_read: Some(1.25e-7),
-        },
-    );
-    m.insert(
-        "gpt-5.1-codex-max",
-        CodexModel {
-            input: 1.25e-6,
-            output: 1e-5,
-            cache_read: Some(1.25e-7),
-        },
-    );
-    m.insert(
-        "gpt-5.1-codex-mini",
-        CodexModel {
-            input: 2.5e-7,
-            output: 2e-6,
-            cache_read: Some(2.5e-8),
-        },
-    );
-    m.insert(
-        "gpt-5.2",
-        CodexModel {
-            input: 1.75e-6,
-            output: 1.4e-5,
-            cache_read: Some(1.75e-7),
-        },
-    );
-    m.insert(
-        "gpt-5.2-codex",
-        CodexModel {
-            input: 1.75e-6,
-            output: 1.4e-5,
-            cache_read: Some(1.75e-7),
-        },
-    );
-    m.insert(
-        "gpt-5.2-pro",
-        CodexModel {
-            input: 2.1e-5,
-            output: 1.68e-4,
-            cache_read: None,
-        },
-    );
-    m.insert(
-        "gpt-5.3-codex",
-        CodexModel {
-            input: 1.75e-6,
-            output: 1.4e-5,
-            cache_read: Some(1.75e-7),
-        },
-    );
-    m.insert(
-        "gpt-5.3-codex-spark",
-        CodexModel {
-            input: 0.0,
-            output: 0.0,
-            cache_read: Some(0.0),
-        },
-    );
-    m.insert(
-        "gpt-5.4",
-        CodexModel {
-            input: 2.5e-6,
-            output: 1.5e-5,
-            cache_read: Some(2.5e-7),
-        },
-    );
-    m.insert(
-        "gpt-5.4-mini",
-        CodexModel {
-            input: 7.5e-7,
-            output: 4.5e-6,
-            cache_read: Some(7.5e-8),
-        },
-    );
-    m.insert(
-        "gpt-5.4-nano",
-        CodexModel {
-            input: 2e-7,
-            output: 1.25e-6,
-            cache_read: Some(2e-8),
-        },
-    );
-    m.insert(
-        "gpt-5.4-pro",
-        CodexModel {
-            input: 3e-5,
-            output: 1.8e-4,
-            cache_read: None,
-        },
-    );
-    // v0.4.0 — gpt-5.5 family. OpenAI hasn't published official
-    // billing yet; rates mirror gpt-5.4 as a best-known approximation.
-    // VM E2E on 2026-05-02 found Codex with model="gpt-5.5" and
-    // 16K tokens rendering as $0.00 because pricing.rs returned None.
-    // Approximate-but-non-zero is materially better than zero for
-    // cost-aware UX. Replace with official prices when published.
-    m.insert(
-        "gpt-5.5",
-        CodexModel {
-            input: 2.5e-6,
-            output: 1.5e-5,
-            cache_read: Some(2.5e-7),
-        },
-    );
-    m.insert(
-        "gpt-5.5-codex",
-        CodexModel {
-            input: 2.5e-6,
-            output: 1.5e-5,
-            cache_read: Some(2.5e-7),
-        },
-    );
-    m.insert(
-        "gpt-5.5-mini",
-        CodexModel {
-            input: 7.5e-7,
-            output: 4.5e-6,
-            cache_read: Some(7.5e-8),
-        },
-    );
-    m.insert(
-        "gpt-5.5-nano",
-        CodexModel {
-            input: 2e-7,
-            output: 1.25e-6,
-            cache_read: Some(2e-8),
-        },
-    );
-    m.insert(
-        "gpt-5.5-pro",
-        CodexModel {
-            input: 3e-5,
-            output: 1.8e-4,
-            cache_read: None,
-        },
-    );
-    m
-});
 
 static CLAUDE_MODELS: Lazy<HashMap<&'static str, ClaudeModel>> = Lazy::new(|| {
     let mut m = HashMap::new();
@@ -305,6 +362,33 @@ static CLAUDE_BEDROCK_VER_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"-v\d+:\d+$
 static CLAUDE_FAMILY_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^claude-(opus|sonnet|haiku)-\d+-\d+$").unwrap());
 
+/// Names OpenAI routes to a priced model: `(alias, model it is billed as)`.
+///
+/// Used only to find a request's rates (`codex_price_key`). The model keeps
+/// the name Codex logged everywhere else. Renaming it would change the stored
+/// and uploaded model name, and the daily rows already uploaded under the old
+/// name would stay beside the new ones (the upload only ever upserts).
+const CODEX_ALIASES: &[(&str, &str)] = &[
+    // The unsuffixed gpt-5.6 is Sol.
+    ("gpt-5.6", "gpt-5.6-sol"),
+    // Codex's name for the Luna Reserve quota bucket.
+    ("gpt-reserve", "gpt-5.6-luna"),
+    // The Daybreak aliases point to Sol (blue) and Cyber (red).
+    ("gpt-daybreak-blue-latest", "gpt-5.6-sol"),
+    ("gpt-daybreak-red-latest", "gpt-5.6-cyber"),
+];
+
+fn codex_alias(model: &str) -> Option<&'static str> {
+    CODEX_ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == model)
+        .map(|(_, target)| *target)
+}
+
+/// The model name Codex cost is stored and shown under: the logged name
+/// without an `openai/` prefix, and without a date suffix when the undated
+/// name has rates. Aliases are NOT resolved here (see `CODEX_ALIASES`). Same
+/// rule as the macOS app's `normalizeCodexModel`.
 pub fn normalize_codex_model(raw: &str) -> String {
     let trimmed = raw.trim();
     let trimmed = trimmed.strip_prefix("openai/").unwrap_or(trimmed);
@@ -405,22 +489,283 @@ fn claude_family_fallback(model: &str) -> Option<String> {
     best_key.map(|k| k.to_string())
 }
 
+/// The rate row `model` is billed at: its own, else the one its alias names
+/// (a dated spelling of an alias, `gpt-5.6-2026-08-01`, included). `None`
+/// when neither has rates.
+///
+/// The date suffix of an alias is dropped here and not in
+/// `normalize_codex_model`, which drops it only when the rest names a row:
+/// dropping it there would change the name the model's days are stored under.
+/// Same resolution as the macOS app's `codexPriceResolution` (less its
+/// version fallback, which the desktop does not have).
+pub fn codex_price_key(model: &str) -> Option<&'static str> {
+    let normalized = normalize_codex_model(model);
+    if let Some((key, _)) = CODEX_MODELS.get_key_value(normalized.as_str()) {
+        return Some(*key);
+    }
+    codex_alias(&normalized)
+        .or_else(|| {
+            CODEX_DATED_RE
+                .find(&normalized)
+                .and_then(|m| codex_alias(&normalized[..m.start()]))
+        })
+        .filter(|target| CODEX_MODELS.contains_key(*target))
+}
+
+/// Whether `model` has Codex rates. A model without them has no cost at all
+/// (shown as unknown), which is different from a model priced at zero.
+pub fn codex_model_is_priced(model: &str) -> bool {
+    codex_price_key(model).is_some()
+}
+
+/// The rates `model` had at `at_unix_ms` (`None` = today's rates).
+pub fn codex_rates_at(model: &str, at_unix_ms: Option<i64>) -> Option<CodexModel> {
+    let key = codex_price_key(model)?;
+    if let (Some(at), Some((repriced_at, earlier))) = (at_unix_ms, CODEX_EARLIER_RATES.get(key)) {
+        if at < *repriced_at {
+            return Some(*earlier);
+        }
+    }
+    CODEX_MODELS.get(key).copied()
+}
+
+/// A digest of everything that decides what a Codex request costs: every rate
+/// row, the earlier (dated) rates, the aliases, the long-context threshold,
+/// and which row each of `CODEX_FINGERPRINT_MODEL_NAMES` is billed at.
+///
+/// Codex cost is worked out while a file is parsed and kept in the scan cache,
+/// so without this a table change would not reach requests already parsed: a
+/// repriced model would keep its old cost, and a model that just gained rates
+/// would show `$0.00` for its cached requests as if that were its price. The
+/// Codex cache records this digest and is rebuilt when it differs
+/// (`cache::load`), so editing the table needs no manual version bump.
+pub fn codex_pricing_fingerprint() -> String {
+    static FINGERPRINT: Lazy<String> = Lazy::new(|| {
+        codex_pricing_fingerprint_of(
+            &CODEX_MODELS,
+            &CODEX_EARLIER_RATES,
+            CODEX_ALIASES,
+            CODEX_LONG_CONTEXT_INPUT_TOKENS,
+        )
+    });
+    FINGERPRINT.clone()
+}
+
+/// Model names whose resolution the price fingerprint records: rows, the
+/// `openai/` and dated spellings, aliases and a dated alias, and names no row
+/// prices. The macOS app's `codexFingerprintModelNames`.
+const CODEX_FINGERPRINT_MODEL_NAMES: &[&str] = &[
+    "gpt-5",
+    "gpt-5-codex",
+    "gpt-5-mini",
+    "gpt-5.1-codex-max",
+    "gpt-5.3-codex-spark",
+    "gpt-5.4",
+    "gpt-5.4-pro",
+    "gpt-5.5",
+    "openai/gpt-5.5",
+    "gpt-5.5-2026-04-23",
+    "gpt-5.5-codex",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.6-mini",
+    "gpt-5.7",
+    "gpt-5.7-pro",
+    "gpt-6-astra",
+    "gpt-4.1",
+    "o3",
+    "codex-mini-latest",
+    "gpt-5.6",
+    "gpt-5.6-2026-08-01",
+    "gpt-reserve",
+    "gpt-daybreak-red-latest",
+    "gpt-6-sol",
+    "gpt-6.2",
+];
+
+fn codex_pricing_fingerprint_of(
+    models: &HashMap<&str, CodexModel>,
+    earlier: &HashMap<&str, (i64, CodexModel)>,
+    aliases: &[(&str, &str)],
+    long_context_input_tokens: i64,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let text = codex_pricing_fingerprint_text(models, earlier, aliases, long_context_input_tokens);
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// The text `codex_pricing_fingerprint` digests.
+fn codex_pricing_fingerprint_text(
+    models: &HashMap<&str, CodexModel>,
+    earlier: &HashMap<&str, (i64, CodexModel)>,
+    aliases: &[(&str, &str)],
+    long_context_input_tokens: i64,
+) -> String {
+    use std::fmt::Write;
+
+    // Rates are written as their exact bits, so any change to a row shows.
+    fn put_rates(out: &mut String, r: &CodexRates) {
+        let cached = r
+            .cache_read
+            .map_or_else(|| "-".to_string(), |c| format!("{:016x}", c.to_bits()));
+        let _ = write!(
+            out,
+            "{:016x}/{cached}/{:016x};",
+            r.input.to_bits(),
+            r.output.to_bits()
+        );
+    }
+    fn put_model(out: &mut String, m: &CodexModel) {
+        put_rates(out, &m.standard);
+        match &m.long_context {
+            Some(long) => put_rates(out, long),
+            None => out.push_str("-;"),
+        }
+    }
+
+    // Sorted, so the digest does not depend on hash-map order.
+    let mut text = format!("long_context_input_tokens={long_context_input_tokens}\n");
+    let mut names: Vec<&&str> = models.keys().collect();
+    names.sort();
+    for name in names {
+        let _ = write!(text, "model {name} ");
+        put_model(&mut text, &models[name]);
+        text.push('\n');
+    }
+    let mut names: Vec<&&str> = earlier.keys().collect();
+    names.sort();
+    for name in names {
+        let (until, rates) = &earlier[name];
+        let _ = write!(text, "earlier {name} until {until} ");
+        put_model(&mut text, rates);
+        text.push('\n');
+    }
+    let mut sorted_aliases = aliases.to_vec();
+    sorted_aliases.sort();
+    for (alias, target) in sorted_aliases {
+        let _ = writeln!(text, "alias {alias} {target}");
+    }
+    // How names resolve to a row (always the real resolution). A change there
+    // moves which rate a stored cost used, or whether a stored $0 means
+    // unpriced, without changing a single row.
+    for name in CODEX_FINGERPRINT_MODEL_NAMES {
+        let _ = writeln!(
+            text,
+            "resolve {name} {}",
+            codex_price_key(name).unwrap_or("-")
+        );
+    }
+    text
+}
+
+/// USD cost of ONE Codex request, at the rates in force at `at_unix_ms`
+/// (`None` = today's rates). `None` when the model has no rates.
+///
+/// OpenAI reports `input_tokens` as the whole prompt, with cached reads a
+/// subset of it, so cached tokens are clamped to the input and billed at the
+/// cached rate while the rest is billed at the input rate. When the request's
+/// input exceeds `CODEX_LONG_CONTEXT_INPUT_TOKENS` and the model has a
+/// long-context tier, the whole request uses the long-context rates.
+///
+/// Call this per request. Summing a day's tokens first and pricing the total
+/// would put almost every busy day into the long-context tier.
 pub fn codex_cost_usd(
     model: &str,
     input_tokens: i64,
     cached_input_tokens: i64,
     output_tokens: i64,
+    at_unix_ms: Option<i64>,
 ) -> Option<f64> {
-    let key = normalize_codex_model(model);
-    let p = CODEX_MODELS.get(key.as_str())?;
-    let cached = cached_input_tokens.max(0).min(input_tokens.max(0));
-    let non_cached = (input_tokens - cached).max(0);
-    let cached_rate = p.cache_read.unwrap_or(p.input);
+    let priced = codex_rates_at(model, at_unix_ms)?;
+    let long_context = input_tokens.max(0) > CODEX_LONG_CONTEXT_INPUT_TOKENS;
+    Some(codex_tokens_cost(
+        &priced,
+        long_context,
+        input_tokens,
+        cached_input_tokens,
+        output_tokens,
+    ))
+}
+
+/// USD cost of the tokens one Codex `token_count` event counts, at the rates
+/// in force at the event's time. `None` when the model has no rates.
+///
+/// `request` is the event's own `last_token_usage`, the request it reports,
+/// and it alone decides the long-context tier: the counted tokens are the
+/// growth of a cumulative counter, which is not a request. For a file's first
+/// event that carries a counter over, the growth is less than the request
+/// (and on its own could fall under the line the request crossed). When the
+/// growth is more than the request, the counter also covers requests that
+/// wrote no event of their own, such as an aborted turn's; nothing shows how
+/// large those were, so the part beyond `request` is billed at standard
+/// rates, as a sum. Pricing it with the request would put it over any
+/// threshold. Without `request`, the counted tokens are the request.
+///
+/// The macOS app's `codexEventCostUSD`, field by field.
+pub fn codex_event_cost_usd(
+    model: &str,
+    counted: CodexTotals,
+    request: Option<CodexTotals>,
+    at_unix_ms: Option<i64>,
+) -> Option<f64> {
+    let priced = codex_rates_at(model, at_unix_ms)?;
+    let Some(request) = request else {
+        return Some(codex_tokens_cost(
+            &priced,
+            counted.input.max(0) > CODEX_LONG_CONTEXT_INPUT_TOKENS,
+            counted.input,
+            counted.cached,
+            counted.output,
+        ));
+    };
+    let minus = |a: CodexTotals, b: CodexTotals| CodexTotals {
+        input: a.input.saturating_sub(b.input).max(0),
+        cached: a.cached.saturating_sub(b.cached).max(0),
+        output: a.output.saturating_sub(b.output).max(0),
+    };
+    let beyond = minus(counted, request);
+    let own = minus(counted, beyond);
     Some(
-        non_cached as f64 * p.input
-            + cached as f64 * cached_rate
-            + output_tokens.max(0) as f64 * p.output,
+        codex_tokens_cost(
+            &priced,
+            request.input.max(0) > CODEX_LONG_CONTEXT_INPUT_TOKENS,
+            own.input,
+            own.cached,
+            own.output,
+        ) + codex_tokens_cost(&priced, false, beyond.input, beyond.cached, beyond.output),
     )
+}
+
+/// What `input` (cached reads included), `cached` and `output` tokens cost at
+/// `priced`'s standard rates, or at its long-context rates on every token when
+/// `long_context` and the model has that tier.
+fn codex_tokens_cost(
+    priced: &CodexModel,
+    long_context: bool,
+    input_tokens: i64,
+    cached_input_tokens: i64,
+    output_tokens: i64,
+) -> f64 {
+    let total_input = input_tokens.max(0);
+    let cached = cached_input_tokens.max(0).min(total_input);
+    let non_cached = total_input - cached;
+    let r = match priced.long_context {
+        Some(long) if long_context => CodexRates {
+            input: long.input,
+            cache_read: long.cache_read.or(priced.standard.cache_read),
+            output: long.output,
+        },
+        _ => priced.standard,
+    };
+    let cached_rate = r.cache_read.unwrap_or(r.input);
+    non_cached as f64 * r.input
+        + cached as f64 * cached_rate
+        + output_tokens.max(0) as f64 * r.output
 }
 
 pub fn claude_cost_usd(
@@ -492,7 +837,7 @@ mod tests {
     #[test]
     fn codex_cost_basic_gpt5() {
         // 1M input @ $1.25/M, 0 cache, 100K output @ $10/M  = $1.25 + $1.00 = $2.25
-        let c = codex_cost_usd("gpt-5", 1_000_000, 0, 100_000).unwrap();
+        let c = codex_cost_usd("gpt-5", 1_000_000, 0, 100_000, None).unwrap();
         assert!((c - 2.25).abs() < 1e-9, "expected 2.25, got {}", c);
     }
 
@@ -500,7 +845,7 @@ mod tests {
     fn codex_cost_cached_input_discounted() {
         // 1M input, 500K of it cached (10x cheaper), 0 output
         // 500K @ $1.25/M + 500K @ $0.125/M = $0.625 + $0.0625 = $0.6875
-        let c = codex_cost_usd("gpt-5", 1_000_000, 500_000, 0).unwrap();
+        let c = codex_cost_usd("gpt-5", 1_000_000, 500_000, 0, None).unwrap();
         assert!((c - 0.6875).abs() < 1e-9, "expected 0.6875, got {}", c);
     }
 
@@ -534,8 +879,566 @@ mod tests {
 
     #[test]
     fn unknown_model_returns_none() {
-        assert!(codex_cost_usd("gpt-42-unicorn", 1000, 0, 0).is_none());
+        assert!(codex_cost_usd("gpt-42-unicorn", 1000, 0, 0, None).is_none());
         assert!(claude_cost_usd("claude-opus-99", 1000, 0, 0, 0).is_none());
+    }
+
+    // ---- Codex rates (CodexBar table, dated rates, long context) ----
+
+    fn close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 1e-9,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    /// 2026-08-20T12:00:00Z and 2026-08-22T12:00:00Z: a day either side of the
+    /// Sol repricing.
+    const AUG_20_NOON_MS: i64 = 1_787_227_200_000;
+    const AUG_22_NOON_MS: i64 = 1_787_400_000_000;
+
+    #[test]
+    fn gpt_5_5_uses_published_rates_not_the_gpt_5_4_placeholder() {
+        // 100K input @ $5/M + 10K output @ $30/M = $0.50 + $0.30 = $0.80
+        // (the placeholder gave $0.25 + $0.15).
+        close(
+            codex_cost_usd("gpt-5.5", 100_000, 0, 10_000, None).unwrap(),
+            0.80,
+        );
+        // 200K input, 150K of it cached: 50K @ $5/M + 150K @ $0.50/M = $0.325.
+        close(
+            codex_cost_usd("gpt-5.5", 200_000, 150_000, 0, None).unwrap(),
+            0.325,
+        );
+    }
+
+    #[test]
+    fn new_models_are_priced() {
+        // 100K input + 10K output each, today's rates.
+        close(
+            codex_cost_usd("gpt-6-astra", 100_000, 0, 10_000, None).unwrap(),
+            100_000.0 * 1e-5 + 10_000.0 * 5e-5,
+        );
+        close(
+            codex_cost_usd("gpt-5.6-sol", 100_000, 0, 10_000, None).unwrap(),
+            100_000.0 * 4e-6 + 10_000.0 * 2e-5,
+        );
+        close(
+            codex_cost_usd("gpt-5.6-terra", 100_000, 0, 10_000, None).unwrap(),
+            100_000.0 * 2e-6 + 10_000.0 * 1.2e-5,
+        );
+        close(
+            codex_cost_usd("gpt-5.6-luna", 100_000, 0, 10_000, None).unwrap(),
+            100_000.0 * 2e-7 + 10_000.0 * 1.2e-6,
+        );
+        close(
+            codex_cost_usd("gpt-5.6-cyber", 100_000, 0, 10_000, None).unwrap(),
+            100_000.0 * 1.25e-5 + 10_000.0 * 7.5e-5,
+        );
+        close(
+            codex_cost_usd("gpt-5.5-cyber", 100_000, 0, 10_000, None).unwrap(),
+            100_000.0 * 1.25e-5 + 10_000.0 * 7.5e-5,
+        );
+        close(
+            codex_cost_usd("gpt-6-sol", 100_000, 0, 10_000, None).unwrap(),
+            100_000.0 * 2e-6 + 10_000.0 * 1e-5,
+        );
+        close(
+            codex_cost_usd("gpt-6-luna", 100_000, 0, 10_000, None).unwrap(),
+            100_000.0 * 1e-7 + 10_000.0 * 5e-7,
+        );
+        // gpt-6.1-sol: cached input at 5% of input. 100K input, 80K cached:
+        // 20K @ $2/M + 80K @ $0.10/M = $0.04 + $0.008.
+        close(
+            codex_cost_usd("gpt-6.1-sol", 100_000, 80_000, 0, None).unwrap(),
+            0.048,
+        );
+    }
+
+    #[test]
+    fn long_context_switches_the_whole_request_above_272k_input() {
+        // Exactly 272K is still standard: 272K @ $10/M = $2.72.
+        close(
+            codex_cost_usd("gpt-6-astra", 272_000, 0, 0, None).unwrap(),
+            2.72,
+        );
+        // One token more and EVERY token is at the long-context rate
+        // ($20/M), not just the one above the line: 272,001 @ $20/M.
+        close(
+            codex_cost_usd("gpt-6-astra", 272_001, 0, 0, None).unwrap(),
+            272_001.0 * 2e-5,
+        );
+        // Output and cached input switch too: 300K input with 200K cached and
+        // 10K output = 100K @ $20/M + 200K @ $2/M + 10K @ $75/M
+        // = $2.00 + $0.40 + $0.75.
+        close(
+            codex_cost_usd("gpt-6-astra", 300_000, 200_000, 10_000, None).unwrap(),
+            3.15,
+        );
+        // gpt-5.4 gained the same tier: 300K @ $5/M = $1.50.
+        close(
+            codex_cost_usd("gpt-5.4", 300_000, 0, 0, None).unwrap(),
+            1.50,
+        );
+        // The -pro models have a tier and no cached rate: 300K with 100K
+        // "cached" is all billed at the long-context input rate, $60/M.
+        close(
+            codex_cost_usd("gpt-5.5-pro", 300_000, 100_000, 0, None).unwrap(),
+            18.0,
+        );
+        close(
+            codex_cost_usd("gpt-5.4-pro", 100_000, 0, 1_000, None).unwrap(),
+            3.0 + 0.18,
+        );
+        // A flat model never switches: 300K @ $1.25/M = $0.375.
+        close(codex_cost_usd("gpt-5", 300_000, 0, 0, None).unwrap(), 0.375);
+    }
+
+    #[test]
+    fn sol_is_billed_at_the_rate_of_the_request_day() {
+        // 100K input (under the 272K line). Before 2026-08-21: $5/M = $0.50.
+        // From 2026-08-21: $4/M = $0.40.
+        let before = codex_cost_usd("gpt-5.6-sol", 100_000, 0, 0, Some(AUG_20_NOON_MS));
+        let after = codex_cost_usd("gpt-5.6-sol", 100_000, 0, 0, Some(AUG_22_NOON_MS));
+        close(before.unwrap(), 0.50);
+        close(after.unwrap(), 0.40);
+        // No time = today's rate.
+        close(
+            codex_cost_usd("gpt-5.6-sol", 100_000, 0, 0, None).unwrap(),
+            0.40,
+        );
+        // The earlier rates keep their own long-context tier: 300K @ $10/M.
+        close(
+            codex_cost_usd("gpt-5.6-sol", 300_000, 0, 0, Some(AUG_20_NOON_MS)).unwrap(),
+            3.0,
+        );
+        // Today's long-context rate for comparison: 300K @ $8/M.
+        close(
+            codex_cost_usd("gpt-5.6-sol", 300_000, 0, 0, Some(AUG_22_NOON_MS)).unwrap(),
+            2.4,
+        );
+    }
+
+    #[test]
+    fn repricing_boundaries_are_exact() {
+        // The last millisecond before the change is billed at the old rate,
+        // the first millisecond of the change day at the new one. 100K input
+        // each, under the long-context line.
+        let cost = |model: &str, at: i64| codex_cost_usd(model, 100_000, 0, 0, Some(at)).unwrap();
+        let sol = CODEX_SOL_REPRICED_UNIX_MS;
+        close(cost("gpt-5.6-sol", sol - 1), 0.50);
+        close(cost("gpt-5.6-sol", sol), 0.40);
+        let tl = CODEX_TERRA_LUNA_REPRICED_UNIX_MS;
+        close(cost("gpt-5.6-terra", tl - 1), 0.25);
+        close(cost("gpt-5.6-terra", tl), 0.20);
+        // Luna was five times today's price before the change.
+        close(cost("gpt-5.6-luna", tl - 1), 0.10);
+        close(cost("gpt-5.6-luna", tl), 0.02);
+        // The dates are the ones the constants claim.
+        let as_utc = |ms: i64| {
+            chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms)
+                .unwrap()
+                .format("%Y-%m-%dT%H:%M:%S")
+                .to_string()
+        };
+        assert_eq!(as_utc(sol), "2026-08-21T00:00:00");
+        assert_eq!(as_utc(tl), "2026-07-30T00:00:00");
+        assert_eq!(as_utc(AUG_20_NOON_MS), "2026-08-20T12:00:00");
+        assert_eq!(as_utc(AUG_22_NOON_MS), "2026-08-22T12:00:00");
+    }
+
+    #[test]
+    fn models_without_a_repricing_ignore_the_date() {
+        let early = Some(1_700_000_000_000); // 2023
+        assert_eq!(
+            codex_cost_usd("gpt-6-astra", 1_000, 0, 0, early),
+            codex_cost_usd("gpt-6-astra", 1_000, 0, 0, None)
+        );
+    }
+
+    #[test]
+    fn codex_aliases_are_billed_as_their_model() {
+        assert_eq!(codex_price_key("gpt-5.6"), Some("gpt-5.6-sol"));
+        assert_eq!(codex_price_key("openai/gpt-5.6"), Some("gpt-5.6-sol"));
+        assert_eq!(codex_price_key("gpt-reserve"), Some("gpt-5.6-luna"));
+        assert_eq!(
+            codex_price_key("gpt-daybreak-blue-latest"),
+            Some("gpt-5.6-sol")
+        );
+        assert_eq!(
+            codex_price_key("gpt-daybreak-red-latest"),
+            Some("gpt-5.6-cyber")
+        );
+        assert_eq!(
+            codex_price_key("gpt-6-astra-2026-09-01"),
+            Some("gpt-6-astra")
+        );
+        assert_eq!(codex_price_key("gpt-42-unicorn"), None);
+        // An alias is priced exactly like its target, dated rates included.
+        assert_eq!(
+            codex_cost_usd("gpt-5.6", 1_000, 0, 0, Some(AUG_20_NOON_MS)),
+            codex_cost_usd("gpt-5.6-sol", 1_000, 0, 0, Some(AUG_20_NOON_MS))
+        );
+        assert_eq!(
+            codex_cost_usd("gpt-reserve", 1_000, 0, 0, None),
+            codex_cost_usd("gpt-5.6-luna", 1_000, 0, 0, None)
+        );
+    }
+
+    #[test]
+    fn a_dated_alias_is_billed_as_its_model_and_keeps_its_name() {
+        // As on the Mac (`CodexPricingTable.aliasTarget`): a date suffix on an
+        // alias is dropped for the price lookup only.
+        assert_eq!(codex_price_key("gpt-5.6-2026-08-01"), Some("gpt-5.6-sol"));
+        assert_eq!(
+            codex_price_key("openai/gpt-reserve-2026-09-01"),
+            Some("gpt-5.6-luna")
+        );
+        assert_eq!(
+            normalize_codex_model("gpt-5.6-2026-08-01"),
+            "gpt-5.6-2026-08-01"
+        );
+        assert_eq!(
+            codex_cost_usd("gpt-5.6-2026-08-01", 1_000, 0, 0, Some(AUG_20_NOON_MS)),
+            codex_cost_usd("gpt-5.6-sol", 1_000, 0, 0, Some(AUG_20_NOON_MS))
+        );
+        // A date on a name that is neither a row nor an alias prices nothing.
+        assert_eq!(codex_price_key("gpt-42-unicorn-2026-08-01"), None);
+    }
+
+    fn t(input: i64, cached: i64, output: i64) -> CodexTotals {
+        CodexTotals {
+            input,
+            cached,
+            output,
+        }
+    }
+
+    #[test]
+    fn an_events_own_request_decides_its_long_context_tier() {
+        // gpt-6-astra: $10/M, $1/M cached, $50/M output; above 272K $20/M,
+        // $2/M, $75/M. 100K counted of a 300K request (a counter that passed
+        // its old high by 100K): the request is long-context, so are they.
+        close(
+            codex_event_cost_usd(
+                "gpt-6-astra",
+                t(100_000, 0, 0),
+                Some(t(300_000, 0, 0)),
+                None,
+            )
+            .unwrap(),
+            2.0,
+        );
+        // 300K counted of a 200K request is never long-context: deciding by
+        // the counted tokens would bill it all at $20/M.
+        close(
+            codex_event_cost_usd(
+                "gpt-6-astra",
+                t(200_000, 0, 0),
+                Some(t(200_000, 0, 0)),
+                None,
+            )
+            .unwrap(),
+            2.0,
+        );
+        // Growth beyond the request is a sum of unknown requests: standard
+        // rates. 600K counted of a 300K request: 300K @ $20/M + 300K @ $10/M.
+        close(
+            codex_event_cost_usd(
+                "gpt-6-astra",
+                t(600_000, 0, 0),
+                Some(t(300_000, 0, 0)),
+                None,
+            )
+            .unwrap(),
+            9.0,
+        );
+        // Field by field: the part of each field beyond the request is billed
+        // at standard rates. Counted 400K input (100K cached) and 20K output
+        // of a 300K-input (50K cached), 10K-output request:
+        // own 300K input of which 50K cached, 10K output, long-context:
+        //   250K @ $20/M + 50K @ $2/M + 10K @ $75/M = $5 + $0.10 + $0.75;
+        // beyond 100K input of which 50K cached, 10K output, standard:
+        //   50K @ $10/M + 50K @ $1/M + 10K @ $50/M = $0.50 + $0.05 + $0.50.
+        close(
+            codex_event_cost_usd(
+                "gpt-6-astra",
+                t(400_000, 100_000, 20_000),
+                Some(t(300_000, 50_000, 10_000)),
+                None,
+            )
+            .unwrap(),
+            5.85 + 1.05,
+        );
+        // Without `last_token_usage`, the counted tokens are the request.
+        close(
+            codex_event_cost_usd("gpt-6-astra", t(300_000, 0, 0), None, None).unwrap(),
+            6.0,
+        );
+        // Equal to the per-request price when counted and request agree.
+        assert_eq!(
+            codex_event_cost_usd(
+                "gpt-5.5",
+                t(5_000, 1_000, 300),
+                Some(t(5_000, 1_000, 300)),
+                None
+            ),
+            codex_cost_usd("gpt-5.5", 5_000, 1_000, 300, None)
+        );
+        // Dated rates apply, and an unpriced model has no cost.
+        close(
+            codex_event_cost_usd(
+                "gpt-5.6",
+                t(100_000, 0, 0),
+                Some(t(100_000, 0, 0)),
+                Some(AUG_20_NOON_MS),
+            )
+            .unwrap(),
+            0.50,
+        );
+        assert_eq!(
+            codex_event_cost_usd("gpt-42-unicorn", t(1, 0, 0), None, None),
+            None
+        );
+    }
+
+    #[test]
+    fn codex_aliases_keep_the_logged_name() {
+        // The stored, uploaded and displayed name is the one Codex logged, as
+        // on the Mac. Renaming it would leave the rows already uploaded under
+        // the old name beside new ones under the target's name.
+        assert_eq!(normalize_codex_model("gpt-5.6"), "gpt-5.6");
+        assert_eq!(normalize_codex_model("openai/gpt-5.6"), "gpt-5.6");
+        assert_eq!(normalize_codex_model("gpt-reserve"), "gpt-reserve");
+        assert_eq!(
+            normalize_codex_model("gpt-daybreak-red-latest"),
+            "gpt-daybreak-red-latest"
+        );
+        // The prefix and a date suffix on a priced model are still stripped.
+        assert_eq!(
+            normalize_codex_model("openai/gpt-6-astra-2026-09-01"),
+            "gpt-6-astra"
+        );
+    }
+
+    #[test]
+    fn every_alias_names_a_priced_model() {
+        for (alias, target) in CODEX_ALIASES {
+            assert!(
+                CODEX_MODELS.contains_key(target),
+                "{alias} -> {target}, which has no rates"
+            );
+            assert!(
+                !CODEX_MODELS.contains_key(alias),
+                "{alias} is both an alias and a row; the row would win"
+            );
+        }
+    }
+
+    // ---- The pricing fingerprint the Codex scan cache is checked against ----
+
+    fn fingerprint(
+        models: &HashMap<&str, CodexModel>,
+        earlier: &HashMap<&str, (i64, CodexModel)>,
+        aliases: &[(&str, &str)],
+        threshold: i64,
+    ) -> String {
+        codex_pricing_fingerprint_of(models, earlier, aliases, threshold)
+    }
+
+    #[test]
+    fn pricing_fingerprint_is_the_current_tables() {
+        assert_eq!(
+            codex_pricing_fingerprint(),
+            fingerprint(
+                &CODEX_MODELS,
+                &CODEX_EARLIER_RATES,
+                CODEX_ALIASES,
+                CODEX_LONG_CONTEXT_INPUT_TOKENS
+            )
+        );
+        assert_eq!(codex_pricing_fingerprint().len(), 16);
+        // Stable across calls and independent of hash-map order.
+        let mut reordered: HashMap<&str, CodexModel> = HashMap::new();
+        let mut names: Vec<_> = CODEX_MODELS.keys().copied().collect();
+        names.sort_unstable();
+        names.reverse();
+        for name in names {
+            reordered.insert(name, CODEX_MODELS[name]);
+        }
+        assert_eq!(
+            fingerprint(
+                &reordered,
+                &CODEX_EARLIER_RATES,
+                CODEX_ALIASES,
+                CODEX_LONG_CONTEXT_INPUT_TOKENS
+            ),
+            codex_pricing_fingerprint()
+        );
+    }
+
+    #[test]
+    fn pricing_fingerprint_records_how_names_resolve() {
+        // How a name resolves to a row moves a stored cost without changing
+        // any row, so the digest covers it for a fixed list of names, as the
+        // Mac's fingerprint does.
+        let text = codex_pricing_fingerprint_text(
+            &CODEX_MODELS,
+            &CODEX_EARLIER_RATES,
+            CODEX_ALIASES,
+            CODEX_LONG_CONTEXT_INPUT_TOKENS,
+        );
+        for line in [
+            "resolve gpt-5.6-2026-08-01 gpt-5.6-sol",
+            "resolve openai/gpt-5.5 gpt-5.5",
+            "resolve gpt-reserve gpt-5.6-luna",
+            "resolve gpt-6.2 -",
+        ] {
+            assert!(text.lines().any(|l| l == line), "missing: {line}");
+        }
+        assert_eq!(
+            text.lines().filter(|l| l.starts_with("resolve ")).count(),
+            CODEX_FINGERPRINT_MODEL_NAMES.len()
+        );
+    }
+
+    #[test]
+    fn pricing_fingerprint_changes_with_every_part_of_the_table() {
+        let base_models: HashMap<&str, CodexModel> = CODEX_MODELS.clone();
+        let base_earlier: HashMap<&str, (i64, CodexModel)> = CODEX_EARLIER_RATES.clone();
+        let base_aliases: Vec<(&str, &str)> = CODEX_ALIASES.to_vec();
+        let threshold = CODEX_LONG_CONTEXT_INPUT_TOKENS;
+        let base = fingerprint(&base_models, &base_earlier, &base_aliases, threshold);
+
+        let mut changed: Vec<(&str, String)> = Vec::new();
+
+        let mut m = base_models.clone();
+        m.insert("gpt-6.2", flat(1e-6, Some(1e-7), 1e-5));
+        changed.push((
+            "a new row",
+            fingerprint(&m, &base_earlier, &base_aliases, threshold),
+        ));
+
+        let mut m = base_models.clone();
+        m.get_mut("gpt-5.5").unwrap().standard.output = 3.1e-5;
+        changed.push((
+            "an output rate",
+            fingerprint(&m, &base_earlier, &base_aliases, threshold),
+        ));
+
+        let mut m = base_models.clone();
+        m.get_mut("gpt-5.5").unwrap().standard.cache_read = None;
+        changed.push((
+            "a cached rate removed",
+            fingerprint(&m, &base_earlier, &base_aliases, threshold),
+        ));
+
+        let mut m = base_models.clone();
+        m.get_mut("gpt-6-astra").unwrap().long_context = None;
+        changed.push((
+            "a long-context tier removed",
+            fingerprint(&m, &base_earlier, &base_aliases, threshold),
+        ));
+
+        let mut e = base_earlier.clone();
+        e.get_mut("gpt-5.6-sol").unwrap().0 += 86_400_000;
+        changed.push((
+            "a repricing date",
+            fingerprint(&base_models, &e, &base_aliases, threshold),
+        ));
+
+        let mut e = base_earlier.clone();
+        e.get_mut("gpt-5.6-luna").unwrap().1.standard.input = 9e-7;
+        changed.push((
+            "an earlier rate",
+            fingerprint(&base_models, &e, &base_aliases, threshold),
+        ));
+
+        let mut a = base_aliases.clone();
+        a.push(("gpt-6", "gpt-6-sol"));
+        changed.push((
+            "a new alias",
+            fingerprint(&base_models, &base_earlier, &a, threshold),
+        ));
+
+        let mut a = base_aliases.clone();
+        a[0].1 = "gpt-5.6-terra";
+        changed.push((
+            "an alias target",
+            fingerprint(&base_models, &base_earlier, &a, threshold),
+        ));
+
+        changed.push((
+            "the long-context threshold",
+            fingerprint(&base_models, &base_earlier, &base_aliases, 400_000),
+        ));
+
+        for (what, fp) in changed {
+            assert_ne!(fp, base, "changing {what} left the fingerprint as it was");
+        }
+    }
+
+    #[test]
+    fn gpt_5_5_codex_costs_the_same_as_gpt_5_5() {
+        for (input, cached, output) in [(1_000, 0, 10), (300_000, 100_000, 5_000)] {
+            assert_eq!(
+                codex_cost_usd("gpt-5.5-codex", input, cached, output, None),
+                codex_cost_usd("gpt-5.5", input, cached, output, None)
+            );
+        }
+    }
+
+    #[test]
+    fn priced_means_has_rates_even_at_zero() {
+        assert!(codex_model_is_priced("gpt-6-astra"));
+        assert!(codex_model_is_priced("gpt-5.6"));
+        // Spark is priced, at $0: a known zero, not an unknown.
+        assert!(codex_model_is_priced("gpt-5.3-codex-spark"));
+        assert_eq!(
+            codex_cost_usd("gpt-5.3-codex-spark", 500_000, 0, 1_000, None),
+            Some(0.0)
+        );
+        assert!(!codex_model_is_priced("gpt-42-unicorn"));
+    }
+
+    #[test]
+    fn codex_table_rows_are_internally_consistent() {
+        // Catches a transposed argument in a row: cached input never costs
+        // more than input, output never less than input, and a long-context
+        // tier is never cheaper than the standard rates it replaces.
+        let all = CODEX_MODELS
+            .iter()
+            .map(|(k, v)| (format!("{k} (today)"), *v))
+            .chain(
+                CODEX_EARLIER_RATES
+                    .iter()
+                    .map(|(k, (_, v))| (format!("{k} (earlier)"), *v)),
+            );
+        for (name, model) in all {
+            let s = model.standard;
+            if let Some(c) = s.cache_read {
+                assert!(c <= s.input, "{name}: cached rate above input rate");
+            }
+            assert!(s.output >= s.input, "{name}: output rate below input rate");
+            if let Some(l) = model.long_context {
+                assert!(l.input >= s.input, "{name}: long-context input cheaper");
+                assert!(l.output >= s.output, "{name}: long-context output cheaper");
+                if let (Some(lc), Some(sc)) = (l.cache_read, s.cache_read) {
+                    assert!(lc >= sc, "{name}: long-context cached cheaper");
+                    assert!(lc <= l.input, "{name}: long-context cached above input");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn earlier_rates_only_cover_priced_models() {
+        for key in CODEX_EARLIER_RATES.keys() {
+            assert!(
+                CODEX_MODELS.contains_key(key),
+                "{key} has earlier rates but no current row"
+            );
+        }
     }
 
     // ---- Claude family fallback (Swift-parity; guards $0-on-new-minor) ----
