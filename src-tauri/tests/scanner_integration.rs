@@ -577,6 +577,69 @@ fn codex_long_context_request_bills_the_whole_request_higher() {
     assert_usd(codex_sum(&result.entries, "gpt-6-astra").3, 6.075);
 }
 
+/// `token_count` line with a cumulative total and the request's own
+/// `last_token_usage` (input only).
+fn codex_total_last(ts: &str, model: &str, total: i64, last: i64) -> String {
+    format!(
+        r#"{{"type":"event_msg","timestamp":"{ts}","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{total},"cached_input_tokens":0,"output_tokens":0}},"last_token_usage":{{"input_tokens":{last},"cached_input_tokens":0,"output_tokens":0}},"model":"{model}"}}}}}}"#
+    )
+}
+
+#[test]
+fn codex_long_context_tier_is_decided_by_the_request_the_event_reports() {
+    // gpt-6-astra: $10/M standard, $20/M above 272K. A 300K request; the
+    // counter then restarts (skipped) and its next event reports another
+    // 300K request while the total passes the old high by only 100K. Those
+    // 100K are part of a long-context request, so they pay $20/M:
+    // 300K @ $20/M + 100K @ $20/M = $8.00. Deciding the tier from the 100K
+    // counted would bill them at $10/M ($7.00).
+    let env = TempEnv::new("codex_tier_from_request");
+    env.write_codex(
+        "2026",
+        "09",
+        "10",
+        "r.jsonl",
+        &lines(&[
+            codex_meta("2026-09-10T11:59:00Z", "tier-from-request", None),
+            codex_total_last("2026-09-10T12:00:00Z", "gpt-6-astra", 300_000, 300_000),
+            codex_total_last("2026-09-10T12:01:00Z", "gpt-6-astra", 100_000, 100_000),
+            codex_total_last("2026-09-10T12:02:00Z", "gpt-6-astra", 400_000, 300_000),
+        ]),
+    );
+    let today = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+    let result = scanner::scan_with_options(env.options(1, Some(today))).unwrap();
+    let (input, _, _, cost) = codex_sum(&result.entries, "gpt-6-astra");
+    assert_eq!(input, 400_000);
+    assert_usd(cost, 8.00);
+}
+
+#[test]
+fn codex_growth_beyond_the_request_is_billed_at_standard_rates() {
+    // The total grows by 600K while the event reports a 300K request: a
+    // turn was aborted after a request that wrote no event of its own. The
+    // growth counts in full (as on the Mac), but only the reported request
+    // takes the long-context tier; nothing shows how large the rest was.
+    // First event 300K @ $20/M = $6; then 300K @ $20/M + 300K @ $10/M = $9.
+    // Pricing the 600K as one request would give $12 for the second.
+    let env = TempEnv::new("codex_gap_over_last_cost");
+    env.write_codex(
+        "2026",
+        "09",
+        "10",
+        "r.jsonl",
+        &lines(&[
+            codex_meta("2026-09-10T11:59:00Z", "gap-over-last", None),
+            codex_total_last("2026-09-10T12:00:00Z", "gpt-6-astra", 300_000, 300_000),
+            codex_total_last("2026-09-10T12:05:00Z", "gpt-6-astra", 900_000, 300_000),
+        ]),
+    );
+    let today = NaiveDate::from_ymd_opt(2026, 9, 10).unwrap();
+    let result = scanner::scan_with_options(env.options(1, Some(today))).unwrap();
+    let (input, _, _, cost) = codex_sum(&result.entries, "gpt-6-astra");
+    assert_eq!(input, 900_000);
+    assert_usd(cost, 15.00);
+}
+
 #[test]
 fn codex_rates_follow_the_request_time() {
     // gpt-5.6-sol was repriced from $5/M to $4/M input on 2026-08-21. One
@@ -1045,12 +1108,37 @@ fn claude_half_written_last_line_is_counted_once_it_is_complete() {
 // Codex — the accounting cases shared with the macOS app
 // ========================================================================
 
-/// The macOS app's Codex accounting cases, copied unchanged from
+/// The macOS app's Codex accounting cases, copied byte for byte from
 /// `CLI Pulse Bar/CLIPulseCore/Tests/Fixtures/codex-accounting-cases.json` in
-/// cli-pulse/cli-pulse-private (commit 4c3dc377). Both apps must report the
-/// same tokens per day and model for them, so the two cannot drift apart
-/// unnoticed. When the Mac's copy changes, copy it again.
+/// cli-pulse/cli-pulse-private, where they last changed in f18939f2 (#625).
+/// Both apps must report the same tokens per day and model for them, so the
+/// two cannot drift apart unnoticed. When the Mac's copy changes, copy it
+/// again with `scripts/sync-codex-accounting-cases.sh <commit>`, which also
+/// prints the new `MAC_CODEX_CASES_SHA256`.
 const MAC_CODEX_CASES: &str = include_str!("fixtures/codex-accounting-cases.json");
+
+/// The commit of cli-pulse-private the copy was taken from, and the SHA-256 of
+/// the file there (LF line endings).
+const MAC_CODEX_CASES_COMMIT: &str = "f18939f2";
+const MAC_CODEX_CASES_SHA256: &str =
+    "b9da812dc66f40ace0d4c37aeae41d136ebd4014c42a90af3f0eb2ba6e6659cd";
+
+#[test]
+fn the_shared_cases_are_the_macs_file_unchanged() {
+    use sha2::{Digest, Sha256};
+    // A Windows checkout can turn LF into CRLF; the Mac's file is LF.
+    let lf = MAC_CODEX_CASES.replace("\r\n", "\n");
+    let digest: String = Sha256::digest(lf.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(
+        digest, MAC_CODEX_CASES_SHA256,
+        "fixtures/codex-accounting-cases.json is not the Mac's file at {MAC_CODEX_CASES_COMMIT}. \
+         Do not edit it here: change the Mac's, then copy it with \
+         scripts/sync-codex-accounting-cases.sh"
+    );
+}
 
 /// Cases the desktop deliberately counts differently from the Mac, as
 /// `(case, what the desktop reports)`. Each is asserted both ways: the
@@ -1119,7 +1207,7 @@ fn codex_accounting_matches_the_mac_on_the_shared_cases() {
         .date_naive();
     let days = fixture["days_to_scan"].as_u64().unwrap() as u32;
     let cases = fixture["cases"].as_array().unwrap();
-    assert!(cases.len() >= 14, "fixture lost cases");
+    assert!(cases.len() >= 20, "fixture lost cases");
     for (name, _) in DESKTOP_DIFFERS_FROM_MAC {
         assert!(
             cases.iter().any(|c| c["name"] == *name),
@@ -1181,4 +1269,54 @@ fn codex_accounting_matches_the_mac_on_the_shared_cases() {
         "desktop Codex accounting disagrees with the shared cases:\n{}",
         failures.join("\n")
     );
+}
+
+/// Opt-in: scan a real Codex home with the desktop's rules and write the
+/// per-day, per-model Codex numbers to a JSON file, so they can be compared
+/// with the macOS app's on the same logs (its replica,
+/// `scripts/codex_accounting_replica.py` in cli-pulse-private, counts by the
+/// Mac's rules):
+///
+/// ```text
+/// CLIPULSE_REAL_CODEX_HOME=$HOME/.codex CLIPULSE_REAL_CODEX_OUT=/some/file.json \
+///   [CLIPULSE_REAL_CODEX_TODAY=2026-10-03] \
+///   cargo test --test scanner_integration codex_scan_real_logs_when_asked
+/// ```
+///
+/// Does nothing unless both variables are set. The logs are only read; the
+/// scan cache goes to a temporary directory. The output holds days, model
+/// names and numbers, never a path or anything a log says.
+#[test]
+fn codex_scan_real_logs_when_asked() {
+    let (Ok(home), Ok(out)) = (
+        std::env::var("CLIPULSE_REAL_CODEX_HOME"),
+        std::env::var("CLIPULSE_REAL_CODEX_OUT"),
+    ) else {
+        eprintln!("skipped: set CLIPULSE_REAL_CODEX_HOME and CLIPULSE_REAL_CODEX_OUT");
+        return;
+    };
+    let home = PathBuf::from(home);
+    let today = std::env::var("CLIPULSE_REAL_CODEX_TODAY")
+        .ok()
+        .map(|d| NaiveDate::parse_from_str(&d, "%Y-%m-%d").expect("CLIPULSE_REAL_CODEX_TODAY"));
+    let env = TempEnv::new("real_codex_logs");
+    let mut opts = env.options(30, today);
+    opts.codex_roots_override = Some(vec![home.join("sessions"), home.join("archived_sessions")]);
+    opts.claude_roots_override = Some(Vec::new());
+    let result = scanner::scan_with_options(opts).unwrap();
+
+    let mut days: BTreeMap<String, BTreeMap<String, serde_json::Value>> = BTreeMap::new();
+    for e in result.entries.iter().filter(|e| e.provider == "Codex") {
+        days.entry(e.date.clone()).or_default().insert(
+            e.model.clone(),
+            serde_json::json!([e.input_tokens, e.cached_tokens, e.output_tokens, e.cost_usd]),
+        );
+    }
+    let report = serde_json::json!({
+        "today": result.today_key,
+        "days_scanned": result.days_scanned,
+        "days": days,
+    });
+    fs::write(&out, serde_json::to_string_pretty(&report).unwrap()).unwrap();
+    assert!(!days.is_empty(), "no Codex usage found");
 }

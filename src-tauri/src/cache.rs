@@ -47,19 +47,27 @@ const CACHE_SCHEMA_VERSION: u32 = 1;
 ///
 /// Codex history:
 /// - 0: day-level Codex cost, the cumulative baseline followed every drop.
-/// - 1: per-request cost with dated and long-context rates (packed slot 3);
+/// - 1: an earlier revision of 2, never released. It took every line a
+///   sub-agent numbered before its `subagent_history_start_ordinal` for
+///   copied history, which in a migrated sub-agent rollout is all of its own
+///   work, and decided a request's long-context tier from the tokens counted.
+/// - 2: per-request cost with dated and long-context rates (packed slot 3),
+///   the tier decided by the request an event reports (`last_token_usage`);
 ///   the cumulative baseline only rises (a snapshot below it is skipped) and
 ///   a counter carried over from before the file's first event is not
 ///   counted again (`scanner::CodexCounter`); a sub-agent's or fork's copy of
-///   its parent's history is left out; state advances on out-of-range events
-///   too; the rollout id and event span are recorded so a second copy of a
-///   rollout is counted once.
+///   its parent's history is left out (`CodexCopiedPrefix`); state advances
+///   on out-of-range events too; only a file's first line can be its own
+///   `session_meta`; the rollout id and event span are recorded so a second
+///   copy of a rollout is counted once. The macOS app's Codex rules version 5.
 ///
 /// Price-table changes do not need a bump: they change
-/// `pricing_fingerprint(provider)`, which is checked as well.
+/// `pricing_fingerprint(provider)`, which is checked as well. So does a
+/// change to how one of the names the fingerprint records resolves to a row
+/// (`pricing::codex_price_key`).
 pub fn rules_version(provider: &str) -> u32 {
     match provider {
-        "codex" => 1,
+        "codex" => 2,
         _ => 0,
     }
 }
@@ -92,10 +100,48 @@ pub struct CodexChildMeta {
     /// Time of the file's own `session_meta`, Unix ms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meta_ms: Option<i64>,
-    /// `subagent_history_start_ordinal`: the line number (`ordinal`) where the
-    /// file's own history starts.
+    /// `subagent_history_start_ordinal`: the number Codex gives the first
+    /// line of the file's own history. Whether the lines numbered before it
+    /// were copied in is `copied_prefix`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_start_ordinal: Option<i64>,
+    /// How the copied part of a file with a `history_start_ordinal` was
+    /// recognised; `None` until it has been. Kept so that an incremental
+    /// parse goes on applying the answer the earlier part of the file gave.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copied_prefix: Option<CodexCopiedPrefix>,
+}
+
+/// What marks the copied part of a sub-agent or fork rollout that names a
+/// history boundary (`subagent_history_start_ordinal`). Codex writes two
+/// shapes:
+///
+/// * A current child rollout copies its ancestor's history in *with* the
+///   ancestor's `session_meta`, just after its own, and numbers its own
+///   history from the boundary. The lines before the boundary are the
+///   ancestor's.
+/// * Codex's migration of older sub-agent rollouts rewrites them without the
+///   copied `session_meta` lines and moves the boundary to the end of the
+///   file, so every line is numbered before it. The boundary marks nothing
+///   there: the file holds the sub-agent's own work, which starts at the
+///   parent's first inter-agent message to it. What comes before that message
+///   is the parent's last requests, replayed.
+///
+/// Same cases as the macOS app's `CodexCopiedPrefix`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexCopiedPrefix {
+    /// An ancestor's `session_meta` came before the boundary: the lines
+    /// numbered before the boundary are copied history.
+    AncestorMetadata,
+    /// No copied `session_meta`; an inter-agent message came before the
+    /// boundary: the token events before it were the parent's replayed tail,
+    /// and everything after it counts.
+    InterAgentMessage,
+    /// Neither came before the held events had to be decided (at the end of a
+    /// read, or at a line numbered past the boundary): they counted, and so
+    /// does the rest.
+    NoMarker,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -545,7 +591,15 @@ mod tests {
         let codex = load("codex", Some(&tmp));
         assert!(codex.days.is_empty(), "stale Codex cache was reused");
         assert_eq!(codex.rules_version, rules_version("codex"));
-        assert_eq!(rules_version("codex"), 1);
+        assert_eq!(rules_version("codex"), 2);
+
+        // One written by the unreleased revision 1 counted a migrated
+        // sub-agent's own work as copied history: rebuilt too.
+        let mut revision_1 = seeded();
+        revision_1.rules_version = 1;
+        revision_1.pricing_fingerprint = pricing_fingerprint("codex");
+        save("codex", &revision_1, Some(&tmp)).unwrap();
+        assert!(load("codex", Some(&tmp)).days.is_empty());
 
         // The same file on the Claude side is still current: no rescan.
         save("claude", &seeded(), Some(&tmp)).unwrap();

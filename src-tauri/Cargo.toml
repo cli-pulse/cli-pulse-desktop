@@ -52,6 +52,9 @@ anyhow = "1"
 thiserror = "1"
 regex = "1"
 walkdir = "2"
+# Substring search over raw log lines (the Codex scanner looks for line types
+# without decoding the line). Already in the build graph through `regex`.
+memchr = "2"
 once_cell = "1"
 log = "0.4"
 # v0.4.6 — atomic write for provider_creds.json (write-temp + persist).

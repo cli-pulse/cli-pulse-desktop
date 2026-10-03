@@ -13,7 +13,9 @@
 //!   272K input tokens, every token of that request is billed at the model's
 //!   long-context rates. A day's total crosses 272K almost always, so Codex cost
 //!   must be summed from per-request costs (`scanner.rs` does this while
-//!   parsing), never computed from a day's tokens.
+//!   parsing), never computed from a day's tokens. The request is the one a
+//!   `token_count` event reports (`last_token_usage`), whatever the event's
+//!   counted share of it (`codex_event_cost_usd`).
 //! - **Rates are dated.** A model that was repriced keeps its old rate for
 //!   requests made before the change (`CODEX_EARLIER_RATES`). Pass the request's
 //!   time; `None` means today's rates.
@@ -74,6 +76,8 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
+
+use crate::cache::CodexTotals;
 
 /// One set of Codex rates, USD per token.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -485,14 +489,27 @@ fn claude_family_fallback(model: &str) -> Option<String> {
     best_key.map(|k| k.to_string())
 }
 
-/// The rate row `model` is billed at: its own, else the one its alias names.
-/// `None` when neither has rates.
+/// The rate row `model` is billed at: its own, else the one its alias names
+/// (a dated spelling of an alias, `gpt-5.6-2026-08-01`, included). `None`
+/// when neither has rates.
+///
+/// The date suffix of an alias is dropped here and not in
+/// `normalize_codex_model`, which drops it only when the rest names a row:
+/// dropping it there would change the name the model's days are stored under.
+/// Same resolution as the macOS app's `codexPriceResolution` (less its
+/// version fallback, which the desktop does not have).
 pub fn codex_price_key(model: &str) -> Option<&'static str> {
     let normalized = normalize_codex_model(model);
     if let Some((key, _)) = CODEX_MODELS.get_key_value(normalized.as_str()) {
         return Some(*key);
     }
-    codex_alias(&normalized).filter(|target| CODEX_MODELS.contains_key(*target))
+    codex_alias(&normalized)
+        .or_else(|| {
+            CODEX_DATED_RE
+                .find(&normalized)
+                .and_then(|m| codex_alias(&normalized[..m.start()]))
+        })
+        .filter(|target| CODEX_MODELS.contains_key(*target))
 }
 
 /// Whether `model` has Codex rates. A model without them has no cost at all
@@ -513,7 +530,8 @@ pub fn codex_rates_at(model: &str, at_unix_ms: Option<i64>) -> Option<CodexModel
 }
 
 /// A digest of everything that decides what a Codex request costs: every rate
-/// row, the earlier (dated) rates, the aliases and the long-context threshold.
+/// row, the earlier (dated) rates, the aliases, the long-context threshold,
+/// and which row each of `CODEX_FINGERPRINT_MODEL_NAMES` is billed at.
 ///
 /// Codex cost is worked out while a file is parsed and kept in the scan cache,
 /// so without this a table change would not reach requests already parsed: a
@@ -533,6 +551,39 @@ pub fn codex_pricing_fingerprint() -> String {
     FINGERPRINT.clone()
 }
 
+/// Model names whose resolution the price fingerprint records: rows, the
+/// `openai/` and dated spellings, aliases and a dated alias, and names no row
+/// prices. The macOS app's `codexFingerprintModelNames`.
+const CODEX_FINGERPRINT_MODEL_NAMES: &[&str] = &[
+    "gpt-5",
+    "gpt-5-codex",
+    "gpt-5-mini",
+    "gpt-5.1-codex-max",
+    "gpt-5.3-codex-spark",
+    "gpt-5.4",
+    "gpt-5.4-pro",
+    "gpt-5.5",
+    "openai/gpt-5.5",
+    "gpt-5.5-2026-04-23",
+    "gpt-5.5-codex",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.6-mini",
+    "gpt-5.7",
+    "gpt-5.7-pro",
+    "gpt-6-astra",
+    "gpt-4.1",
+    "o3",
+    "codex-mini-latest",
+    "gpt-5.6",
+    "gpt-5.6-2026-08-01",
+    "gpt-reserve",
+    "gpt-daybreak-red-latest",
+    "gpt-6-sol",
+    "gpt-6.2",
+];
+
 fn codex_pricing_fingerprint_of(
     models: &HashMap<&str, CodexModel>,
     earlier: &HashMap<&str, (i64, CodexModel)>,
@@ -540,6 +591,21 @@ fn codex_pricing_fingerprint_of(
     long_context_input_tokens: i64,
 ) -> String {
     use sha2::{Digest, Sha256};
+    let text = codex_pricing_fingerprint_text(models, earlier, aliases, long_context_input_tokens);
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// The text `codex_pricing_fingerprint` digests.
+fn codex_pricing_fingerprint_text(
+    models: &HashMap<&str, CodexModel>,
+    earlier: &HashMap<&str, (i64, CodexModel)>,
+    aliases: &[(&str, &str)],
+    long_context_input_tokens: i64,
+) -> String {
     use std::fmt::Write;
 
     // Rates are written as their exact bits, so any change to a row shows.
@@ -584,12 +650,17 @@ fn codex_pricing_fingerprint_of(
     for (alias, target) in sorted_aliases {
         let _ = writeln!(text, "alias {alias} {target}");
     }
-
-    Sha256::digest(text.as_bytes())
-        .iter()
-        .take(8)
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    // How names resolve to a row (always the real resolution). A change there
+    // moves which rate a stored cost used, or whether a stored $0 means
+    // unpriced, without changing a single row.
+    for name in CODEX_FINGERPRINT_MODEL_NAMES {
+        let _ = writeln!(
+            text,
+            "resolve {name} {}",
+            codex_price_key(name).unwrap_or("-")
+        );
+    }
+    text
 }
 
 /// USD cost of ONE Codex request, at the rates in force at `at_unix_ms`
@@ -611,11 +682,80 @@ pub fn codex_cost_usd(
     at_unix_ms: Option<i64>,
 ) -> Option<f64> {
     let priced = codex_rates_at(model, at_unix_ms)?;
+    let long_context = input_tokens.max(0) > CODEX_LONG_CONTEXT_INPUT_TOKENS;
+    Some(codex_tokens_cost(
+        &priced,
+        long_context,
+        input_tokens,
+        cached_input_tokens,
+        output_tokens,
+    ))
+}
+
+/// USD cost of the tokens one Codex `token_count` event counts, at the rates
+/// in force at the event's time. `None` when the model has no rates.
+///
+/// `request` is the event's own `last_token_usage`, the request it reports,
+/// and it alone decides the long-context tier: the counted tokens are the
+/// growth of a cumulative counter, which is not a request. For a file's first
+/// event that carries a counter over, the growth is less than the request
+/// (and on its own could fall under the line the request crossed). When the
+/// growth is more than the request, the counter also covers requests that
+/// wrote no event of their own, such as an aborted turn's; nothing shows how
+/// large those were, so the part beyond `request` is billed at standard
+/// rates, as a sum. Pricing it with the request would put it over any
+/// threshold. Without `request`, the counted tokens are the request.
+///
+/// The macOS app's `codexEventCostUSD`, field by field.
+pub fn codex_event_cost_usd(
+    model: &str,
+    counted: CodexTotals,
+    request: Option<CodexTotals>,
+    at_unix_ms: Option<i64>,
+) -> Option<f64> {
+    let priced = codex_rates_at(model, at_unix_ms)?;
+    let Some(request) = request else {
+        return Some(codex_tokens_cost(
+            &priced,
+            counted.input.max(0) > CODEX_LONG_CONTEXT_INPUT_TOKENS,
+            counted.input,
+            counted.cached,
+            counted.output,
+        ));
+    };
+    let minus = |a: CodexTotals, b: CodexTotals| CodexTotals {
+        input: a.input.saturating_sub(b.input).max(0),
+        cached: a.cached.saturating_sub(b.cached).max(0),
+        output: a.output.saturating_sub(b.output).max(0),
+    };
+    let beyond = minus(counted, request);
+    let own = minus(counted, beyond);
+    Some(
+        codex_tokens_cost(
+            &priced,
+            request.input.max(0) > CODEX_LONG_CONTEXT_INPUT_TOKENS,
+            own.input,
+            own.cached,
+            own.output,
+        ) + codex_tokens_cost(&priced, false, beyond.input, beyond.cached, beyond.output),
+    )
+}
+
+/// What `input` (cached reads included), `cached` and `output` tokens cost at
+/// `priced`'s standard rates, or at its long-context rates on every token when
+/// `long_context` and the model has that tier.
+fn codex_tokens_cost(
+    priced: &CodexModel,
+    long_context: bool,
+    input_tokens: i64,
+    cached_input_tokens: i64,
+    output_tokens: i64,
+) -> f64 {
     let total_input = input_tokens.max(0);
     let cached = cached_input_tokens.max(0).min(total_input);
     let non_cached = total_input - cached;
     let r = match priced.long_context {
-        Some(long) if total_input > CODEX_LONG_CONTEXT_INPUT_TOKENS => CodexRates {
+        Some(long) if long_context => CodexRates {
             input: long.input,
             cache_read: long.cache_read.or(priced.standard.cache_read),
             output: long.output,
@@ -623,11 +763,9 @@ pub fn codex_cost_usd(
         _ => priced.standard,
     };
     let cached_rate = r.cache_read.unwrap_or(r.input);
-    Some(
-        non_cached as f64 * r.input
-            + cached as f64 * cached_rate
-            + output_tokens.max(0) as f64 * r.output,
-    )
+    non_cached as f64 * r.input
+        + cached as f64 * cached_rate
+        + output_tokens.max(0) as f64 * r.output
 }
 
 pub fn claude_cost_usd(
@@ -948,6 +1086,123 @@ mod tests {
     }
 
     #[test]
+    fn a_dated_alias_is_billed_as_its_model_and_keeps_its_name() {
+        // As on the Mac (`CodexPricingTable.aliasTarget`): a date suffix on an
+        // alias is dropped for the price lookup only.
+        assert_eq!(codex_price_key("gpt-5.6-2026-08-01"), Some("gpt-5.6-sol"));
+        assert_eq!(
+            codex_price_key("openai/gpt-reserve-2026-09-01"),
+            Some("gpt-5.6-luna")
+        );
+        assert_eq!(
+            normalize_codex_model("gpt-5.6-2026-08-01"),
+            "gpt-5.6-2026-08-01"
+        );
+        assert_eq!(
+            codex_cost_usd("gpt-5.6-2026-08-01", 1_000, 0, 0, Some(AUG_20_NOON_MS)),
+            codex_cost_usd("gpt-5.6-sol", 1_000, 0, 0, Some(AUG_20_NOON_MS))
+        );
+        // A date on a name that is neither a row nor an alias prices nothing.
+        assert_eq!(codex_price_key("gpt-42-unicorn-2026-08-01"), None);
+    }
+
+    fn t(input: i64, cached: i64, output: i64) -> CodexTotals {
+        CodexTotals {
+            input,
+            cached,
+            output,
+        }
+    }
+
+    #[test]
+    fn an_events_own_request_decides_its_long_context_tier() {
+        // gpt-6-astra: $10/M, $1/M cached, $50/M output; above 272K $20/M,
+        // $2/M, $75/M. 100K counted of a 300K request (a counter that passed
+        // its old high by 100K): the request is long-context, so are they.
+        close(
+            codex_event_cost_usd(
+                "gpt-6-astra",
+                t(100_000, 0, 0),
+                Some(t(300_000, 0, 0)),
+                None,
+            )
+            .unwrap(),
+            2.0,
+        );
+        // 300K counted of a 200K request is never long-context: deciding by
+        // the counted tokens would bill it all at $20/M.
+        close(
+            codex_event_cost_usd(
+                "gpt-6-astra",
+                t(200_000, 0, 0),
+                Some(t(200_000, 0, 0)),
+                None,
+            )
+            .unwrap(),
+            2.0,
+        );
+        // Growth beyond the request is a sum of unknown requests: standard
+        // rates. 600K counted of a 300K request: 300K @ $20/M + 300K @ $10/M.
+        close(
+            codex_event_cost_usd(
+                "gpt-6-astra",
+                t(600_000, 0, 0),
+                Some(t(300_000, 0, 0)),
+                None,
+            )
+            .unwrap(),
+            9.0,
+        );
+        // Field by field: the part of each field beyond the request is billed
+        // at standard rates. Counted 400K input (100K cached) and 20K output
+        // of a 300K-input (50K cached), 10K-output request:
+        // own 300K input of which 50K cached, 10K output, long-context:
+        //   250K @ $20/M + 50K @ $2/M + 10K @ $75/M = $5 + $0.10 + $0.75;
+        // beyond 100K input of which 50K cached, 10K output, standard:
+        //   50K @ $10/M + 50K @ $1/M + 10K @ $50/M = $0.50 + $0.05 + $0.50.
+        close(
+            codex_event_cost_usd(
+                "gpt-6-astra",
+                t(400_000, 100_000, 20_000),
+                Some(t(300_000, 50_000, 10_000)),
+                None,
+            )
+            .unwrap(),
+            5.85 + 1.05,
+        );
+        // Without `last_token_usage`, the counted tokens are the request.
+        close(
+            codex_event_cost_usd("gpt-6-astra", t(300_000, 0, 0), None, None).unwrap(),
+            6.0,
+        );
+        // Equal to the per-request price when counted and request agree.
+        assert_eq!(
+            codex_event_cost_usd(
+                "gpt-5.5",
+                t(5_000, 1_000, 300),
+                Some(t(5_000, 1_000, 300)),
+                None
+            ),
+            codex_cost_usd("gpt-5.5", 5_000, 1_000, 300, None)
+        );
+        // Dated rates apply, and an unpriced model has no cost.
+        close(
+            codex_event_cost_usd(
+                "gpt-5.6",
+                t(100_000, 0, 0),
+                Some(t(100_000, 0, 0)),
+                Some(AUG_20_NOON_MS),
+            )
+            .unwrap(),
+            0.50,
+        );
+        assert_eq!(
+            codex_event_cost_usd("gpt-42-unicorn", t(1, 0, 0), None, None),
+            None
+        );
+    }
+
+    #[test]
     fn codex_aliases_keep_the_logged_name() {
         // The stored, uploaded and displayed name is the one Codex logged, as
         // on the Mac. Renaming it would leave the rows already uploaded under
@@ -1019,6 +1274,31 @@ mod tests {
                 CODEX_LONG_CONTEXT_INPUT_TOKENS
             ),
             codex_pricing_fingerprint()
+        );
+    }
+
+    #[test]
+    fn pricing_fingerprint_records_how_names_resolve() {
+        // How a name resolves to a row moves a stored cost without changing
+        // any row, so the digest covers it for a fixed list of names, as the
+        // Mac's fingerprint does.
+        let text = codex_pricing_fingerprint_text(
+            &CODEX_MODELS,
+            &CODEX_EARLIER_RATES,
+            CODEX_ALIASES,
+            CODEX_LONG_CONTEXT_INPUT_TOKENS,
+        );
+        for line in [
+            "resolve gpt-5.6-2026-08-01 gpt-5.6-sol",
+            "resolve openai/gpt-5.5 gpt-5.5",
+            "resolve gpt-reserve gpt-5.6-luna",
+            "resolve gpt-6.2 -",
+        ] {
+            assert!(text.lines().any(|l| l == line), "missing: {line}");
+        }
+        assert_eq!(
+            text.lines().filter(|l| l.starts_with("resolve ")).count(),
+            CODEX_FINGERPRINT_MODEL_NAMES.len()
         );
     }
 

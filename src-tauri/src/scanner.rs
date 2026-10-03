@@ -31,7 +31,8 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::cache::{
-    self, CodexChildMeta, CodexTotals, CostUsageCache, FileAction, FileEntry, Packed,
+    self, CodexChildMeta, CodexCopiedPrefix, CodexTotals, CostUsageCache, FileAction, FileEntry,
+    Packed,
 };
 use crate::paths;
 use crate::pricing;
@@ -533,6 +534,11 @@ fn codex_date_from_path(path: &Path, root: &Path) -> Option<String> {
 ///    skipped and leaves it where it is. Moving the baseline down to it, as
 ///    the scanner did before, counts the climb back up a second time: a file
 ///    whose counter flips between two series re-counted the gap on every flip.
+///    Growth above the baseline is counted in full, even when it is more than
+///    the event's own request: the counter also covers requests that wrote no
+///    token event of their own (an aborted turn's). CodexBar counts the
+///    request there instead; the shared case `gap_over_last_counts_the_growth`
+///    pins the Mac's and the desktop's choice.
 /// 2. **A counter carried over is not counted again.** When a file's first
 ///    event reports a cumulative total larger than its own request
 ///    (`last_token_usage`), the difference was counted before this file
@@ -544,8 +550,8 @@ fn codex_date_from_path(path: &Path, root: &Path) -> Option<String> {
 ///
 /// These are the Mac's rules 1 and 3. Its rule 2, a sub-agent's or fork's
 /// copy of its parent's history, is applied before an event reaches the
-/// counter (`parse_codex_file`): a copied event is neither counted nor moves
-/// the baseline.
+/// counter (`CodexResume::receive`): a copied event is neither counted nor
+/// moves the baseline.
 ///
 /// Rule 1 follows the monotonic watermark of CodexBar's `CodexTotalsTracker`
 /// (MIT; see the notice in pricing.rs). Not verbatim: upstream latches an
@@ -661,19 +667,40 @@ impl EventSpan {
     }
 }
 
+/// One `token_count` event, with what is needed to file it once it counts.
+/// An event can be held (`CodexResume::receive`) and counted later in the
+/// same parse, so it carries the model in effect when it was written.
+#[derive(Debug, Clone)]
+struct CodexEvent {
+    /// The local day it falls on.
+    day: String,
+    at_ms: Option<i64>,
+    /// The line's own number (`ordinal`), when Codex wrote one.
+    ordinal: Option<i64>,
+    /// `total_token_usage`
+    total: Option<CodexTotals>,
+    /// `last_token_usage`: the request this event reports.
+    last: Option<CodexTotals>,
+    model: String,
+}
+
 /// What a parse carries over from the part of a file already parsed.
 #[derive(Debug, Clone, Default)]
 struct CodexResume {
     model: Option<String>,
     counter: CodexCounter,
     span: EventSpan,
-    /// The file's own `session_meta` has been read. Later ones are ancestors'
-    /// metadata copied in with their history and are ignored.
+    /// The file's first line has been read for its identity, whether or not
+    /// it held a readable `session_meta`. Any later `session_meta` is an
+    /// ancestor's, copied in with its history, and never replaces it.
     saw_meta: bool,
     session_id: Option<String>,
     rollout_id: Option<String>,
     /// Set when the rollout names a parent.
     child: Option<CodexChildMeta>,
+    /// Events held until the copied part of the file is known. Never saved:
+    /// every parse ends with `finish`, so none is left held.
+    pending: Vec<CodexEvent>,
 }
 
 impl CodexResume {
@@ -689,14 +716,20 @@ impl CodexResume {
                 last_ms: e.last_event_ms,
                 count: e.event_count.unwrap_or(0),
             },
-            saw_meta: e.session_id.is_some() || e.rollout_id.is_some() || e.codex_child.is_some(),
+            // A parse that got anywhere has read the first line.
+            saw_meta: e.parsed_bytes.unwrap_or(0) > 0
+                || e.session_id.is_some()
+                || e.rollout_id.is_some()
+                || e.codex_child.is_some(),
             session_id: e.session_id.clone(),
             rollout_id: e.rollout_id.clone(),
             child: e.codex_child,
+            pending: Vec::new(),
         }
     }
 
-    /// A `session_meta` line. Only the file's first one is its own.
+    /// The file's first line, a `session_meta`: the rollout's own. Codex
+    /// writes it there; a later one is an ancestor's (`observe_copied_session_meta`).
     fn observe_session_meta(&mut self, line: &serde_json::Value) {
         if self.saw_meta {
             return;
@@ -725,27 +758,158 @@ impl CodexResume {
                 history_start_ordinal: payload
                     .get("subagent_history_start_ordinal")
                     .and_then(|v| v.as_i64()),
+                copied_prefix: None,
             });
             self.counter.child = true;
         }
     }
 
-    /// Whether a token event is part of the parent's history that a
-    /// sub-agent or fork file begins with (the Mac's rule 2). Codex stamps the
+    /// The file's first line is not a readable `session_meta` (something
+    /// else, or too long). Its identity stays unknown, and must: taking a
+    /// later `session_meta` would take a parent's copied metadata for the
+    /// file's own, and match a child against its parent as if it were a copy.
+    fn observe_unreadable_first_line(&mut self) {
+        self.saw_meta = true;
+    }
+
+    /// A child with a history boundary whose copied part is not known yet.
+    fn awaits_copied_prefix_marker(&self) -> bool {
+        matches!(
+            self.child,
+            Some(CodexChildMeta {
+                history_start_ordinal: Some(_),
+                copied_prefix: None,
+                ..
+            })
+        )
+    }
+
+    /// A `session_meta` line after the first: an ancestor's, copied in with
+    /// its history. Numbered before the boundary, it shows that the lines
+    /// before the boundary are copied; held events are dropped.
+    fn observe_copied_session_meta(&mut self, ordinal: Option<i64>) {
+        self.observe_prefix_marker(ordinal, CodexCopiedPrefix::AncestorMetadata);
+    }
+
+    /// An `inter_agent_communication_metadata` line: a message from another
+    /// agent. The first one before the boundary of a child with no copied
+    /// `session_meta` ends the parent's replayed tail; held events are
+    /// dropped.
+    fn observe_inter_agent_message(&mut self, ordinal: Option<i64>) {
+        self.observe_prefix_marker(ordinal, CodexCopiedPrefix::InterAgentMessage);
+    }
+
+    fn observe_prefix_marker(&mut self, ordinal: Option<i64>, marker: CodexCopiedPrefix) {
+        if !self.awaits_copied_prefix_marker() {
+            return;
+        }
+        let Some(child) = self.child.as_mut() else {
+            return;
+        };
+        let Some(start) = child.history_start_ordinal else {
+            return;
+        };
+        if ordinal.is_some_and(|line| line >= start) {
+            return;
+        }
+        child.copied_prefix = Some(marker);
+        self.pending.clear();
+    }
+
+    /// The events a `token_count` event makes count now, in log order, with
+    /// what each adds: none while it is held, and the held ones first when it
+    /// is the first past the boundary with no marker ahead of it.
+    ///
+    /// The Mac's rule 2. A sub-agent or fork rollout can begin with its
+    /// parent's history copied in, token events included. Codex stamps the
     /// copied lines when it writes them, after the file's own `session_meta`,
-    /// so their times say nothing; what marks them is the line number: the
-    /// `session_meta` names the first line of the file's own history
-    /// (`subagent_history_start_ordinal`) and every line carries its
-    /// `ordinal`. An event stamped before the file's own `session_meta` is
-    /// not its own either (logs without the ordinal).
+    /// so their times say nothing; what marks them depends on which of two
+    /// shapes the file has (`CodexCopiedPrefix`). The `session_meta` names the
+    /// first line of the file's own history (`subagent_history_start_ordinal`)
+    /// and every line carries its number (`ordinal`):
+    /// - when an ancestor's `session_meta` was copied in ahead of that
+    ///   boundary (a current rollout), an event numbered before it is the
+    ///   parent's;
+    /// - when none was (Codex's migration of older sub-agent rollouts moves
+    ///   the boundary to the end of the file and drops the copied
+    ///   `session_meta` lines), the boundary marks nothing: the events before
+    ///   the parent's first inter-agent message are its replayed last
+    ///   requests, and the rest is the sub-agent's own. Until one of the two
+    ///   markers is seen, the events numbered before the boundary are held;
+    ///   if neither comes before the end of the parse or a line past the
+    ///   boundary, they count (`finish`).
+    ///
+    /// An event stamped earlier than the child's own `session_meta` is not
+    /// its own either (`is_copied_history`).
+    fn receive(&mut self, event: CodexEvent) -> Vec<(CodexEvent, CodexTotals)> {
+        let mut counted = Vec::new();
+        if self.awaits_copied_prefix_marker() {
+            let start = self.child.and_then(|c| c.history_start_ordinal);
+            if let (Some(start), Some(line)) = (start, event.ordinal) {
+                if line < start {
+                    self.pending.push(event);
+                    return counted;
+                }
+                counted = self.finish();
+            }
+        }
+        if let Some(delta) = self.count(&event) {
+            counted.push((event, delta));
+        }
+        counted
+    }
+
+    /// No marker came for the held events: they are the file's own and
+    /// count, in order. Called at the end of every parse, so a parse never
+    /// leaves events held.
+    fn finish(&mut self) -> Vec<(CodexEvent, CodexTotals)> {
+        if self.pending.is_empty() {
+            return Vec::new();
+        }
+        if let Some(child) = self.child.as_mut() {
+            child.copied_prefix = Some(CodexCopiedPrefix::NoMarker);
+        }
+        let held = std::mem::take(&mut self.pending);
+        held.into_iter()
+            .filter_map(|event| self.count(&event).map(|delta| (event, delta)))
+            .collect()
+    }
+
+    /// What one event adds, judged now, or `None` when it is copied history
+    /// or no event at all. A copied event does not move the counter or the
+    /// file's event span.
+    fn count(&mut self, event: &CodexEvent) -> Option<CodexTotals> {
+        if self.is_copied_history(event.ordinal, event.at_ms) {
+            return None;
+        }
+        // The counter advances on EVERY event, in the scan window or not. If
+        // it only advanced on in-window events, the first in-window event of a
+        // rollout that began before the window would be measured from zero,
+        // and everything the rollout used before the window would land on the
+        // window's first day.
+        let delta = match (event.total, event.last) {
+            (Some(total), last) => self.counter.observe_total(total, last),
+            (None, Some(last)) => self.counter.observe_last(last),
+            (None, None) => return None,
+        };
+        self.span.observe(event.at_ms);
+        Some(delta)
+    }
+
+    /// Whether a token event is part of the parent's history that a
+    /// sub-agent or fork file begins with: numbered before the boundary once
+    /// an ancestor's `session_meta` has shown the lines before it are copied,
+    /// or stamped before the file's own `session_meta` (logs without the
+    /// ordinal).
     fn is_copied_history(&self, ordinal: Option<i64>, at_ms: Option<i64>) -> bool {
         let Some(child) = self.child else {
             return false;
         };
-        let before_start = matches!(
-            (child.history_start_ordinal, ordinal),
-            (Some(start), Some(line)) if line < start
-        );
+        let before_start = child.copied_prefix == Some(CodexCopiedPrefix::AncestorMetadata)
+            && matches!(
+                (child.history_start_ordinal, ordinal),
+                (Some(start), Some(line)) if line < start
+            );
         let before_meta = matches!(
             (child.meta_ms, at_ms),
             (Some(meta), Some(at)) if at < meta
@@ -827,6 +991,46 @@ fn read_jsonl_line<R: BufRead>(reader: &mut R, buf: &mut Vec<u8>) -> Option<usiz
     }
 }
 
+/// The longest first line read for a rollout's identity. A longer one leaves
+/// the identity unknown (the Mac's `codexFirstLineMaxBytes`).
+const CODEX_FIRST_LINE_MAX_BYTES: usize = 1 << 20;
+/// Lines longer than this are never decoded: only their head is looked at, to
+/// recognise a copied `session_meta` or an inter-agent message. Token events
+/// and turn contexts are far shorter. The Mac's limit (`prefixBytes`).
+const CODEX_DECODED_LINE_MAX_BYTES: usize = 32 * 1024;
+/// How much of a longer line is looked at (the Mac's `jsonlTruncatedHeadBytes`).
+const CODEX_LONG_LINE_HEAD_BYTES: usize = 4096;
+
+fn bytes_contain(haystack: &[u8], needle: &[u8]) -> bool {
+    memchr::memmem::find(haystack, needle).is_some()
+}
+
+/// A JSONL line's own number (`"ordinal":N`), read from its first 512 bytes
+/// without decoding the line: the lines it is needed for, an ancestor's
+/// copied `session_meta`, can be far too long to decode, and Codex writes the
+/// number near the start. The Mac's `codexLineOrdinal`.
+fn codex_line_ordinal(line: &[u8]) -> Option<i64> {
+    let head = &line[..line.len().min(512)];
+    let key = b"\"ordinal\":";
+    let found = head.windows(key.len()).position(|w| w == key)?;
+    let mut rest = head[found + key.len()..]
+        .iter()
+        .copied()
+        .skip_while(|b| matches!(b, b' ' | b'\t' | b'\r'))
+        .peekable();
+    let negative = rest.next_if_eq(&b'-').is_some();
+    let mut value: i64 = 0;
+    let mut digits = 0;
+    while let Some(b) = rest.next_if(|b| b.is_ascii_digit()) {
+        if digits == 18 {
+            break;
+        }
+        value = value * 10 + i64::from(b - b'0');
+        digits += 1;
+    }
+    (digits > 0).then_some(if negative { -value } else { value })
+}
+
 fn parse_codex_file(
     path: &Path,
     range: &DateRange,
@@ -848,9 +1052,9 @@ fn parse_codex_file(
     }
     let mut reader = BufReader::with_capacity(256 * 1024, file);
 
-    let state = &mut out.state;
     let mut bytes_seen: i64 = 0;
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
+    let mut first_line = start_offset == 0;
 
     // IMPORTANT: don't use `reader.lines()` here — it strips `\r\n` AND `\n`
     // but doesn't tell us how many bytes were actually consumed. On Windows
@@ -861,40 +1065,92 @@ fn parse_codex_file(
     // that is still being written for the next scan.
     while let Some(n) = read_jsonl_line(&mut reader, &mut buf) {
         bytes_seen += n as i64;
-        while matches!(buf.last(), Some(&b'\n') | Some(&b'\r')) {
+        if buf.last() == Some(&b'\n') {
             buf.pop();
+        }
+        // The line's length as the Mac measures it: everything before the
+        // newline.
+        let line_len = buf.len();
+        while buf.last() == Some(&b'\r') {
+            buf.pop();
+        }
+
+        // The file's identity comes from its first line and nowhere else.
+        // When that line is something other than a session_meta, it is read
+        // like any other line; the Mac skips it, but Codex always writes the
+        // session_meta first, so the two differ only on a file Codex did not
+        // write.
+        if std::mem::take(&mut first_line) {
+            let own_meta = (line_len <= CODEX_FIRST_LINE_MAX_BYTES
+                && bytes_contain(&buf, b"\"type\":\"session_meta\""))
+            .then(|| serde_json::from_slice::<serde_json::Value>(&buf).ok())
+            .flatten()
+            .filter(|obj| obj.get("type").and_then(|v| v.as_str()) == Some("session_meta"));
+            match own_meta {
+                Some(obj) => {
+                    out.state.observe_session_meta(&obj);
+                    continue;
+                }
+                None => out.state.observe_unreadable_first_line(),
+            }
         }
         if buf.is_empty() {
             continue;
         }
-        let line: &str = match std::str::from_utf8(&buf) {
-            Ok(s) => s,
-            Err(_) => continue,
+
+        let long = line_len > CODEX_DECODED_LINE_MAX_BYTES;
+        let head = if long {
+            &buf[..buf.len().min(CODEX_LONG_LINE_HEAD_BYTES)]
+        } else {
+            &buf[..]
         };
-        if !line.contains("\"type\":\"event_msg\"")
-            && !line.contains("\"type\":\"turn_context\"")
-            && !line.contains("\"type\":\"session_meta\"")
-        {
+        // A later session_meta is an ancestor's, copied in with its history.
+        // It never gives the file its identity and is never decoded; where it
+        // sits is what marks copied history.
+        if bytes_contain(head, b"\"type\":\"session_meta\"") {
+            out.state
+                .observe_copied_session_meta(codex_line_ordinal(head));
             continue;
         }
-        let obj: serde_json::Value = match serde_json::from_str(line) {
+        if out.state.awaits_copied_prefix_marker()
+            && bytes_contain(head, b"\"type\":\"inter_agent_communication_metadata\"")
+        {
+            out.state
+                .observe_inter_agent_message(codex_line_ordinal(head));
+            continue;
+        }
+        if long {
+            continue;
+        }
+        let is_event = bytes_contain(&buf, b"\"type\":\"event_msg\"");
+        if is_event && !bytes_contain(&buf, b"\"token_count\"") {
+            continue;
+        }
+        if !is_event && !bytes_contain(&buf, b"\"type\":\"turn_context\"") {
+            continue;
+        }
+        let obj: serde_json::Value = match serde_json::from_slice(&buf) {
             Ok(v) => v,
             Err(_) => continue,
         };
         let ty = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
-
-        if ty == "session_meta" {
-            state.observe_session_meta(&obj);
-            continue;
-        }
+        // A line without a timestamp is skipped, a turn context included.
+        let ts = match obj.get("timestamp").and_then(|v| v.as_str()) {
+            Some(t) => t,
+            None => continue,
+        };
+        let day = match parse_day_key_local(ts) {
+            Some(d) => d,
+            None => continue,
+        };
 
         if ty == "turn_context" {
             if let Some(payload) = obj.get("payload") {
                 if let Some(m) = payload.get("model").and_then(|v| v.as_str()) {
-                    state.model = Some(m.to_string());
+                    out.state.model = Some(m.to_string());
                 } else if let Some(info) = payload.get("info") {
                     if let Some(m) = info.get("model").and_then(|v| v.as_str()) {
-                        state.model = Some(m.to_string());
+                        out.state.model = Some(m.to_string());
                     }
                 }
             }
@@ -911,81 +1167,77 @@ fn parse_codex_file(
         if payload.get("type").and_then(|v| v.as_str()) != Some("token_count") {
             continue;
         }
-        let ts = match obj.get("timestamp").and_then(|v| v.as_str()) {
-            Some(t) => t,
-            None => continue,
-        };
-        let day = match parse_day_key_local(ts) {
-            Some(d) => d,
-            None => continue,
-        };
 
         let info = payload.get("info");
-        let total = info.and_then(|i| i.get("total_token_usage"));
-        let last = info.and_then(|i| i.get("last_token_usage"));
+        let usage = |key: &str| info.and_then(|i| i.get(key)).filter(|v| v.is_object());
+        let total = usage("total_token_usage");
+        let last = usage("last_token_usage");
         if total.is_none() && last.is_none() {
             continue;
         }
-        let at_ms = parse_unix_ms(ts);
-        // A sub-agent's or fork's copy of its parent's history: the parent's
-        // usage, counted in the parent's own file. Not counted, and it does
-        // not move the counter or the file's event span.
-        let ordinal = obj.get("ordinal").and_then(|v| v.as_i64());
-        if state.is_copied_history(ordinal, at_ms) {
-            continue;
-        }
-        // The counter advances on EVERY event, in the scan window or not. If
-        // it only advanced on in-window events, the first in-window event of a
-        // rollout that began before the window would be measured from zero,
-        // and everything the rollout used before the window would land on the
-        // window's first day.
-        let delta = match (total, last) {
-            (Some(total), last) => state
-                .counter
-                .observe_total(codex_totals(total), last.map(codex_totals)),
-            (None, Some(last)) => state.counter.observe_last(codex_totals(last)),
-            (None, None) => continue,
-        };
-        state.span.observe(at_ms);
-
-        if !in_range(&day, range) || is_zero(&delta) {
-            continue;
-        }
-
         let model = info
             .and_then(|i| i.get("model").and_then(|v| v.as_str()))
             .or_else(|| info.and_then(|i| i.get("model_name").and_then(|v| v.as_str())))
             .or_else(|| payload.get("model").and_then(|v| v.as_str()))
             .or_else(|| obj.get("model").and_then(|v| v.as_str()))
             .map(String::from)
-            .or_else(|| state.model.clone())
+            .or_else(|| out.state.model.clone())
             .unwrap_or_else(|| "gpt-5".to_string());
-
-        let cached = delta.cached.min(delta.input);
-        // Priced per request, at the rates of the request's own time: the
-        // long-context tier is a property of one request, and a repriced
-        // model's rate depends on when the request was made.
-        let cost_nanos = pricing::codex_cost_usd(&model, delta.input, cached, delta.output, at_ms)
-            .map(|c| (c * COST_SCALE).round() as i64)
-            .unwrap_or(0);
-
-        let norm_model = pricing::normalize_codex_model(&model);
-        let day_models = out.file_days.entry(day).or_default();
-        let packed = day_models
-            .entry(norm_model)
-            .or_insert_with(|| vec![0, 0, 0, 0]);
-        while packed.len() < 4 {
-            packed.push(0);
+        let event = CodexEvent {
+            day,
+            at_ms: parse_unix_ms(ts),
+            ordinal: obj.get("ordinal").and_then(|v| v.as_i64()),
+            total: total.map(codex_totals),
+            last: last.map(codex_totals),
+            model,
+        };
+        for (event, delta) in out.state.receive(event) {
+            file_codex_event(&mut out.file_days, range, &event, delta);
         }
-        // Saturating, so an absurd count in a corrupt log cannot overflow.
-        packed[0] = packed[0].saturating_add(delta.input);
-        packed[1] = packed[1].saturating_add(cached);
-        packed[2] = packed[2].saturating_add(delta.output);
-        packed[3] = packed[3].saturating_add(cost_nanos);
+    }
+    // Events still held at the end of the parse count.
+    for (event, delta) in out.state.finish() {
+        file_codex_event(&mut out.file_days, range, &event, delta);
     }
 
     out.parsed_bytes = start_offset + bytes_seen;
     out
+}
+
+/// Add what one counted event adds to its day and model, priced at the
+/// rates in force at its own time, with its own request deciding the
+/// long-context tier (`pricing::codex_event_cost_usd`).
+fn file_codex_event(
+    file_days: &mut HashMap<String, HashMap<String, Packed>>,
+    range: &DateRange,
+    event: &CodexEvent,
+    delta: CodexTotals,
+) {
+    if !in_range(&event.day, range) || is_zero(&delta) {
+        return;
+    }
+    let cost_nanos = pricing::codex_event_cost_usd(
+        &event.model,
+        delta,
+        event.last.map(clamp_totals),
+        event.at_ms,
+    )
+    .map(|c| (c * COST_SCALE).round() as i64)
+    .unwrap_or(0);
+
+    let norm_model = pricing::normalize_codex_model(&event.model);
+    let day_models = file_days.entry(event.day.clone()).or_default();
+    let packed = day_models
+        .entry(norm_model)
+        .or_insert_with(|| vec![0, 0, 0, 0]);
+    while packed.len() < 4 {
+        packed.push(0);
+    }
+    // Saturating, so an absurd count in a corrupt log cannot overflow.
+    packed[0] = packed[0].saturating_add(delta.input);
+    packed[1] = packed[1].saturating_add(delta.cached.min(delta.input));
+    packed[2] = packed[2].saturating_add(delta.output);
+    packed[3] = packed[3].saturating_add(cost_nanos);
 }
 
 // ========================================================================
@@ -1609,26 +1861,70 @@ mod tests {
         );
     }
 
-    #[test]
-    fn copied_history_is_told_by_line_number_or_by_time() {
-        let meta = |ordinal: Option<i64>| CodexResume {
+    // ---- Copied history (the Mac's rule 2) ----
+
+    fn child_meta(start: Option<i64>, prefix: Option<CodexCopiedPrefix>) -> CodexResume {
+        CodexResume {
+            saw_meta: true,
+            counter: CodexCounter {
+                child: true,
+                ..Default::default()
+            },
             child: Some(CodexChildMeta {
                 meta_ms: Some(10_000),
-                history_start_ordinal: ordinal,
+                history_start_ordinal: start,
+                copied_prefix: prefix,
             }),
             ..Default::default()
-        };
-        // The line number decides when the file names its own start; copied
-        // lines are stamped after the file's own session_meta, so their time
-        // says nothing.
-        let marked = meta(Some(5));
+        }
+    }
+
+    /// A token event at `at_ms` with a cumulative `total` input and its own
+    /// request `last` (cached and output zero).
+    fn ev(ordinal: Option<i64>, at_ms: i64, total: i64, last: i64) -> CodexEvent {
+        CodexEvent {
+            day: "2026-09-29".into(),
+            at_ms: Some(at_ms),
+            ordinal,
+            total: Some(tot(total, 0, 0)),
+            last: Some(tot(last, 0, 0)),
+            model: "gpt-5.5".into(),
+        }
+    }
+
+    fn inputs(counted: Vec<(CodexEvent, CodexTotals)>) -> Vec<(Option<i64>, i64)> {
+        counted
+            .into_iter()
+            .map(|(e, d)| (e.ordinal, d.input))
+            .collect()
+    }
+
+    #[test]
+    fn copied_history_is_told_by_line_number_once_marked_or_by_time() {
+        // An ancestor's session_meta ahead of the boundary marks the lines
+        // before it as copied. Their time says nothing: Codex stamps copied
+        // lines after the file's own session_meta.
+        let marked = child_meta(Some(5), Some(CodexCopiedPrefix::AncestorMetadata));
         assert!(marked.is_copied_history(Some(3), Some(20_000)));
         assert!(marked.is_copied_history(Some(4), None));
         assert!(!marked.is_copied_history(Some(5), Some(20_000)));
         assert!(!marked.is_copied_history(None, Some(20_000)));
-        // Without the ordinal, an event stamped before the session_meta is
-        // copied.
-        let unmarked = meta(None);
+        // Without that marker the boundary marks nothing by itself: a
+        // migrated sub-agent numbers all of its own work before it.
+        for prefix in [
+            None,
+            Some(CodexCopiedPrefix::InterAgentMessage),
+            Some(CodexCopiedPrefix::NoMarker),
+        ] {
+            let state = child_meta(Some(5), prefix);
+            assert!(
+                !state.is_copied_history(Some(3), Some(20_000)),
+                "{prefix:?}"
+            );
+        }
+        // An event stamped before the file's own session_meta is copied,
+        // whatever its number.
+        let unmarked = child_meta(None, None);
         assert!(unmarked.is_copied_history(Some(3), Some(9_999)));
         assert!(!unmarked.is_copied_history(Some(3), Some(10_000)));
         assert!(!unmarked.is_copied_history(Some(3), None));
@@ -1638,16 +1934,181 @@ mod tests {
     }
 
     #[test]
-    fn only_the_first_session_meta_is_the_files_own() {
-        let line = |json: &str| serde_json::from_str::<serde_json::Value>(json).unwrap();
-        let mut state = CodexResume::default();
-        state.observe_session_meta(&line(
-            r#"{"type":"session_meta","timestamp":"2026-09-29T11:10:00Z","payload":{"id":"child","session_id":"parent","timestamp":"2026-09-29T11:10:00Z","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}},"subagent_history_start_ordinal":5}}"#,
+    fn an_ancestors_session_meta_drops_the_held_events() {
+        let mut s = child_meta(Some(10), None);
+        assert!(s.awaits_copied_prefix_marker());
+        // Lines numbered before the boundary wait for a marker.
+        assert!(s.receive(ev(Some(2), 20_000, 4000, 4000)).is_empty());
+        assert_eq!(s.pending.len(), 1);
+        // A copied session_meta numbered at or past the boundary is not one.
+        s.observe_copied_session_meta(Some(10));
+        assert!(s.awaits_copied_prefix_marker());
+        // Numbered before it, it is: the held event was the parent's.
+        s.observe_copied_session_meta(Some(1));
+        assert_eq!(
+            s.child.unwrap().copied_prefix,
+            Some(CodexCopiedPrefix::AncestorMetadata)
+        );
+        assert!(s.pending.is_empty());
+        // Later copied lines are dropped as they come; the file's own count,
+        // its first one measured against what it carries over.
+        assert!(s.receive(ev(Some(5), 20_100, 4500, 500)).is_empty());
+        assert_eq!(
+            inputs(s.receive(ev(Some(11), 20_200, 5200, 700))),
+            vec![(Some(11), 700)]
+        );
+        assert!(s.finish().is_empty());
+        assert_eq!(s.span.count, 1);
+        // A later inter-agent message changes nothing once it is decided.
+        s.observe_inter_agent_message(Some(3));
+        assert_eq!(
+            s.child.unwrap().copied_prefix,
+            Some(CodexCopiedPrefix::AncestorMetadata)
+        );
+    }
+
+    #[test]
+    fn an_inter_agent_message_ends_a_migrated_sub_agents_replayed_tail() {
+        // A migrated sub-agent: boundary at the end of the file, no copied
+        // session_meta. It starts by replaying the parent's last request.
+        let mut s = child_meta(Some(8), None);
+        assert!(s.receive(ev(Some(2), 20_000, 4500, 2500)).is_empty());
+        s.observe_inter_agent_message(Some(3));
+        assert_eq!(
+            s.child.unwrap().copied_prefix,
+            Some(CodexCopiedPrefix::InterAgentMessage)
+        );
+        assert!(s.pending.is_empty(), "the replayed event was not dropped");
+        // Everything after the message counts, though it is numbered before
+        // the boundary; the first own event counts only its own request.
+        assert_eq!(
+            inputs(s.receive(ev(Some(6), 21_000, 5200, 700))),
+            vec![(Some(6), 700)]
+        );
+        assert_eq!(
+            inputs(s.receive(ev(Some(7), 22_000, 5500, 300))),
+            vec![(Some(7), 300)]
+        );
+        // A marker without a number counts as before the boundary.
+        let mut unnumbered = child_meta(Some(8), None);
+        unnumbered.receive(ev(Some(2), 20_000, 4500, 2500));
+        unnumbered.observe_inter_agent_message(None);
+        assert!(unnumbered.pending.is_empty());
+        // One numbered past the boundary is not a marker.
+        let mut past = child_meta(Some(8), None);
+        past.receive(ev(Some(2), 20_000, 4500, 2500));
+        past.observe_inter_agent_message(Some(8));
+        assert!(past.awaits_copied_prefix_marker());
+        assert_eq!(past.pending.len(), 1);
+    }
+
+    #[test]
+    fn held_events_count_in_order_when_no_marker_comes() {
+        // No marker before a line past the boundary: the held events are the
+        // file's own, and count first, in log order. Counting the later event
+        // first would take its total for a carried counter and skip the rest.
+        let mut s = child_meta(Some(5), None);
+        assert!(s.receive(ev(Some(1), 20_000, 1000, 1000)).is_empty());
+        assert!(s.receive(ev(Some(2), 20_100, 1500, 500)).is_empty());
+        assert_eq!(
+            inputs(s.receive(ev(Some(5), 20_200, 1800, 300))),
+            vec![(Some(1), 1000), (Some(2), 500), (Some(5), 300)]
+        );
+        assert_eq!(
+            s.child.unwrap().copied_prefix,
+            Some(CodexCopiedPrefix::NoMarker)
+        );
+        // Decided: an event before the boundary now counts as it comes.
+        assert_eq!(
+            inputs(s.receive(ev(Some(3), 20_300, 2000, 200))),
+            vec![(Some(3), 200)]
+        );
+
+        // Or at the end of the parse.
+        let mut ended = child_meta(Some(9), None);
+        ended.receive(ev(Some(1), 20_000, 1000, 1000));
+        ended.receive(ev(Some(2), 20_100, 1500, 500));
+        assert_eq!(
+            inputs(ended.finish()),
+            vec![(Some(1), 1000), (Some(2), 500)]
+        );
+        assert_eq!(
+            ended.child.unwrap().copied_prefix,
+            Some(CodexCopiedPrefix::NoMarker)
+        );
+        // Nothing held: the end of a parse decides nothing.
+        let mut empty = child_meta(Some(9), None);
+        assert!(empty.finish().is_empty());
+        assert!(empty.awaits_copied_prefix_marker());
+
+        // An event without a number is judged as it comes, and the held ones
+        // keep waiting.
+        let mut unnumbered = child_meta(Some(9), None);
+        unnumbered.receive(ev(Some(1), 20_000, 1000, 1000));
+        assert_eq!(
+            inputs(unnumbered.receive(ev(None, 20_100, 1500, 500))),
+            vec![(None, 500)]
+        );
+        assert_eq!(unnumbered.pending.len(), 1);
+
+        // Without a boundary nothing is held.
+        let mut no_boundary = child_meta(None, None);
+        assert!(!no_boundary.awaits_copied_prefix_marker());
+        assert_eq!(
+            inputs(no_boundary.receive(ev(Some(1), 20_000, 1000, 1000))),
+            vec![(Some(1), 1000)]
+        );
+        let mut root = CodexResume::default();
+        assert!(!root.awaits_copied_prefix_marker());
+        assert_eq!(
+            inputs(root.receive(ev(Some(1), 20_000, 1000, 1000))),
+            vec![(Some(1), 1000)]
+        );
+    }
+
+    /// Write `lines` to a fresh file and return its path (in a fresh temp dir).
+    fn temp_rollout(name: &str, lines: &[&str]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "cli-pulse-scanner-unit-{name}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
         ));
-        // The parent's session_meta, copied in with its history.
-        state.observe_session_meta(&line(
-            r#"{"type":"session_meta","timestamp":"2026-09-29T11:00:00Z","payload":{"id":"parent","source":"cli"}}"#,
-        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rollout.jsonl");
+        let mut body = String::new();
+        for l in lines {
+            body.push_str(l);
+            body.push('\n');
+        }
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    fn wide_range() -> DateRange {
+        DateRange {
+            since_key: "2026-01-01".into(),
+            until_key: "2026-12-31".into(),
+        }
+    }
+
+    const CHILD_META: &str = r#"{"timestamp":"2026-09-29T11:10:00Z","type":"session_meta","ordinal":0,"payload":{"id":"child","session_id":"parent","timestamp":"2026-09-29T11:10:00Z","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent"}}},"subagent_history_start_ordinal":5}}"#;
+    const PARENT_META: &str = r#"{"timestamp":"2026-09-29T11:10:00.100Z","type":"session_meta","ordinal":1,"payload":{"id":"parent","source":"cli"}}"#;
+
+    fn token_line(ordinal: i64, minute: u32, total: i64, last: i64) -> String {
+        format!(
+            r#"{{"timestamp":"2026-09-29T11:{minute:02}:30Z","type":"event_msg","ordinal":{ordinal},"payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{total},"cached_input_tokens":0,"output_tokens":0}},"last_token_usage":{{"input_tokens":{last},"cached_input_tokens":0,"output_tokens":0}}}}}}}}"#
+        )
+    }
+
+    #[test]
+    fn only_the_first_line_can_be_the_files_own_session_meta() {
+        // The child's own session_meta, then its parent's, copied in.
+        let path = temp_rollout("own-meta", &[CHILD_META, PARENT_META]);
+        let parsed = parse_codex_file(&path, &wide_range(), 0, CodexResume::default());
+        let state = &parsed.state;
         assert_eq!(state.rollout_id.as_deref(), Some("child"));
         assert_eq!(state.session_id.as_deref(), Some("parent"));
         assert!(state.counter.child);
@@ -1656,25 +2117,100 @@ mod tests {
             Some(CodexChildMeta {
                 meta_ms: parse_unix_ms("2026-09-29T11:10:00Z"),
                 history_start_ordinal: Some(5),
+                copied_prefix: Some(CodexCopiedPrefix::AncestorMetadata),
             })
         );
-        // A file that names no parent.
-        let mut root = CodexResume::default();
-        root.observe_session_meta(&line(
-            r#"{"type":"session_meta","timestamp":"2026-09-29T11:00:00Z","payload":{"id":"r","source":"cli","parent_thread_id":""}}"#,
-        ));
-        assert_eq!(root.child, None);
-        assert!(!root.counter.child);
         // Resuming keeps all of it.
-        let entry = CodexParseResult {
-            parsed_bytes: 0,
-            file_days: HashMap::new(),
-            state,
-        }
-        .into_entry(0, 0, HashMap::new());
+        let entry = parsed.into_entry(0, 0, HashMap::new());
         let resumed = CodexResume::from_entry(&entry);
         assert!(resumed.saw_meta && resumed.counter.child);
-        assert_eq!(resumed.child.and_then(|c| c.history_start_ordinal), Some(5));
+        assert_eq!(resumed.child, entry.codex_child);
+        assert!(!resumed.awaits_copied_prefix_marker());
+
+        // A first line that is not a session_meta leaves the identity unknown:
+        // a later one is an ancestor's, and taking it would make the file a
+        // copy of its parent. The first line itself is read as usual.
+        let path = temp_rollout(
+            "no-own-meta",
+            &[
+                &token_line(0, 11, 900, 900),
+                PARENT_META,
+                &token_line(2, 12, 1500, 600),
+            ],
+        );
+        let parsed = parse_codex_file(&path, &wide_range(), 0, CodexResume::default());
+        assert!(parsed.state.saw_meta);
+        assert_eq!(parsed.state.rollout_id, None);
+        assert_eq!(parsed.state.session_id, None);
+        assert_eq!(parsed.state.child, None);
+        assert_eq!(parsed.file_days["2026-09-29"]["gpt-5"][0], 1500);
+        // Resumed past its first line, a file stays without one.
+        let mut entry = parsed.into_entry(0, 0, HashMap::new());
+        assert!(entry.rollout_id.is_none() && entry.codex_child.is_none());
+        assert!(CodexResume::from_entry(&entry).saw_meta);
+        // A file not parsed at all has not read it.
+        entry.parsed_bytes = Some(0);
+        assert!(!CodexResume::from_entry(&entry).saw_meta);
+    }
+
+    #[test]
+    fn the_copied_part_decided_in_one_parse_holds_in_the_next() {
+        // A current child rollout read in two parts: its own session_meta,
+        // the ancestor's, a copied event; then more copied history and its
+        // own work. The second parse must still leave the copy out.
+        let first = [CHILD_META, PARENT_META, &token_line(2, 11, 4000, 4000)];
+        let path = temp_rollout("resume-ancestor", &first);
+        let parsed = parse_codex_file(&path, &wide_range(), 0, CodexResume::default());
+        assert!(parsed.file_days.is_empty());
+        let offset = parsed.parsed_bytes;
+        let entry = parsed.into_entry(0, offset, HashMap::new());
+        let rest = [token_line(3, 12, 4500, 500), token_line(5, 13, 5200, 700)];
+        let mut body = std::fs::read_to_string(&path).unwrap();
+        for l in &rest {
+            body.push_str(l);
+            body.push('\n');
+        }
+        std::fs::write(&path, body).unwrap();
+        let resumed = parse_codex_file(
+            &path,
+            &wide_range(),
+            offset,
+            CodexResume::from_entry(&entry),
+        );
+        assert_eq!(resumed.file_days["2026-09-29"]["gpt-5"][0], 700);
+
+        // A migrated sub-agent read in two parts, the replayed event at the
+        // end of the first: the first parse cannot wait for a marker that is
+        // not written yet, so it counts the event, and the second parse goes
+        // on counting. The Mac does the same (it ends every read with
+        // `finish`). Codex writes a migrated rollout in one go, so a scan
+        // seldom sees it half written.
+        let migrated_meta = CHILD_META.replace(
+            "\"subagent_history_start_ordinal\":5",
+            "\"subagent_history_start_ordinal\":9",
+        );
+        let first = [migrated_meta.as_str(), &token_line(2, 11, 4500, 2500)];
+        let path = temp_rollout("resume-migrated", &first);
+        let parsed = parse_codex_file(&path, &wide_range(), 0, CodexResume::default());
+        assert_eq!(parsed.file_days["2026-09-29"]["gpt-5"][0], 2500);
+        assert_eq!(
+            parsed.state.child.unwrap().copied_prefix,
+            Some(CodexCopiedPrefix::NoMarker)
+        );
+    }
+
+    #[test]
+    fn the_line_number_is_read_without_decoding_the_line() {
+        assert_eq!(
+            codex_line_ordinal(br#"{"type":"session_meta","ordinal":12,"payload":{}}"#),
+            Some(12)
+        );
+        assert_eq!(codex_line_ordinal(br#"{"ordinal": -3,"x":1}"#), Some(-3));
+        assert_eq!(codex_line_ordinal(br#"{"ordinal":"x"}"#), None);
+        assert_eq!(codex_line_ordinal(br#"{"type":"session_meta"}"#), None);
+        // Only the first 512 bytes are looked at.
+        let far = format!(r#"{{"pad":"{}","ordinal":7}}"#, "x".repeat(600));
+        assert_eq!(codex_line_ordinal(far.as_bytes()), None);
     }
 
     #[test]

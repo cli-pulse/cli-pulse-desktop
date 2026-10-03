@@ -16,7 +16,10 @@ All notable changes to CLI Pulse Desktop (Windows + Linux).
 - **Codex cost is priced per request.** A request with more than 272K input tokens is billed at the model's
   long-context rates for the whole request, and a repriced model keeps its old rate for requests made before
   the change (Sol before 2026-08-21, Terra and Luna before 2026-07-30). Both need the request, not the day,
-  so Codex cost is now summed per request while parsing, as Claude's already was.
+  so Codex cost is now summed per request while parsing, as Claude's already was. The request a token event
+  reports decides the tier; growth of the counter beyond that request (a request that logged no event of its
+  own) is billed at standard rates. A dated spelling of an alias (`gpt-5.6-2026-08-01`) is billed as the
+  alias's model too.
 - **A Codex rollout that exists in two places is counted once.** The scan reads both `sessions/` and
   `archived_sessions/` (and each WSL distro's), and told files apart only by path. A file with the same
   rollout id whose events lie within another's time span (the whole file, or an earlier state of it) is now
@@ -26,8 +29,11 @@ All notable changes to CLI Pulse Desktop (Windows + Linux).
   and a snapshot below it is skipped. A rollout file whose counter carries on from an earlier file or from the
   rollout it forks counted the carried total a second time; its first event now counts only its own request.
   A sub-agent's rollout can begin with a copy of its parent's history, token counts included; those lines
-  (numbered before the sub-agent's own history starts) are no longer counted a second time. Both apps run the
-  same shared test cases. The counter also advances on events outside the scan window, so a
+  (numbered before the sub-agent's own history starts, once a copy of the parent's `session_meta` shows they
+  were copied) are no longer counted a second time. A sub-agent rollout that Codex migrated from an older
+  format numbers all of its own work before that point and carries no such copy; it counts in full, except
+  the parent's last requests it replays before the parent's first message to it. Both apps run the same 20
+  shared test cases. The counter also advances on events outside the scan window, so a
   rollout that began before the window no longer puts its earlier usage on the window's first day.
 - **A log line caught half-written is read once it is complete.** A scan that ran while Codex or Claude Code
   was writing a line skipped past it, and the rest of the line never parsed, so that request was lost.
