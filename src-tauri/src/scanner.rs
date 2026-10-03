@@ -270,8 +270,9 @@ fn parse_day_key_local(ts: &str) -> Option<String> {
         let local = dt.with_timezone(&chrono::Local);
         return Some(fmt_date(local.date_naive()));
     }
-    if ts.len() >= 10 {
-        if let Ok(d) = NaiveDate::parse_from_str(&ts[..10], "%Y-%m-%d") {
+    // `get`, not `[..10]`: a byte 10 inside a multi-byte character would panic.
+    if let Some(prefix) = ts.get(..10) {
+        if let Ok(d) = NaiveDate::parse_from_str(prefix, "%Y-%m-%d") {
             return Some(fmt_date(d));
         }
     }
@@ -1653,6 +1654,8 @@ mod tests {
     fn parse_day_key_local_falls_back_to_prefix() {
         let day = parse_day_key_local("2026-04-25");
         assert_eq!(day.as_deref(), Some("2026-04-25"));
+        // A multi-byte character across byte 10 is not a date, not a panic.
+        assert_eq!(parse_day_key_local("2026-04-2\u{e9}T00:00"), None);
     }
 
     #[test]
